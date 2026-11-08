@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.hosthop.stopprobe.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["ServerStopProbeMixin", "GameTestWaitStopMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

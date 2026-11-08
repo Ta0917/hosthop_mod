@@ -49,6 +49,10 @@ if (project.hasProperty('e4mcRelayProbe')) {
     sourceSets.main.java.srcDir('../poc/e4mc-relay/src')
     sourceSets.main.resources.srcDir('../poc/e4mc-relay/resources')
 }
+if (project.hasProperty('hostStopProbe')) {
+    sourceSets.main.java.srcDir('../poc/host-stop/src')
+    sourceSets.main.resources.srcDir('../poc/host-stop/resources')
+}
 
 neoForge {
     // Specify the version of NeoForge to use.
@@ -90,6 +94,9 @@ neoForge {
                 if (project.hasProperty('e4mcLocalOnly')) {
                     systemProperty 'hosthop.e4mcLocalOnly', 'true'
                 }
+            }
+            if (project.hasProperty('hostStopProbe')) {
+                systemProperty 'hosthop.hostStopProbe', 'true'
             }
         }
 
@@ -172,6 +179,7 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
             mod_license            : mod_license,
             mod_version            : mod_version,
             relay_mixin            : project.hasProperty('e4mcRelayProbe') ? '[[mixins]]\nconfig="hosthop-relay-probe.mixins.json"' : '',
+            stop_mixin             : project.hasProperty('hostStopProbe') ? '[[mixins]]\nconfig="hosthop-stop-probe.mixins.json"' : '',
     ]
     inputs.properties replaceProperties
     expand replaceProperties

@@ -6,7 +6,52 @@ public final class LocalHostGateTest {
         validRenewalExtendsHostingAndRejectsOlderResponse();
         expiredRenewalCannotReviveHost();
         lateCallbacksCannotRestartAStoppedAttempt();
+        gracefulPublicationRequiresOrderedEvidence();
+        expiredPublicationRequiresReconciliation();
         System.out.println("LocalHostGate safety checks passed");
+    }
+
+    private static void gracefulPublicationRequiresOrderedEvidence() {
+        var gate = new LocalHostGate();
+        var attempt = gate.beginAcquire();
+        check(gate.acceptGrant(attempt, 4, 7, deadline(), 0, 0), "grant rejected");
+        check(gate.snapshotVerified(attempt, 7, 0, 0), "snapshot rejected");
+        check(gate.beginHosting(attempt, 0, 0), "host start failed");
+        check(!gate.finalSnapshotVerified(attempt, 7, 0, 0), "snapshot accepted while hosting");
+        check(gate.beginGracefulStop(attempt, 0, 0), "graceful stop rejected");
+        check(!gate.mayContinueHosting(attempt, 0, 0), "hosting allowed during shutdown");
+        check(!gate.finalSnapshotVerified(attempt, 7, 0, 0), "snapshot accepted before stop");
+        check(gate.serverStoppedForSnapshot(attempt, 0, 0), "server stop rejected");
+        check(!gate.finalSnapshotVerified(attempt, 6, 0, 0), "wrong base generation accepted");
+        var renewal = gate.beginRenewal(attempt, 5_000_000_000L, 5000);
+        var extension = ConservativeLeaseDeadline.fromGrant(5_000_000_000L, 5000, 105, 135, 2);
+        check(gate.acceptRenewal(attempt, renewal, 4, extension, 6_000_000_000L, 6000), "snapshot renewal rejected");
+        check(gate.finalSnapshotVerified(attempt, 7, 6_000_000_000L, 6000), "verified snapshot rejected");
+        check(gate.mayPublish(attempt, 6_000_000_000L, 6000), "publication rejected");
+        check(!gate.publicationConfirmed(attempt, 9, 6_000_000_000L, 6000), "incorrect generation accepted");
+        check(gate.publicationConfirmed(attempt, 8, 6_000_000_000L, 6000), "commit confirmation rejected");
+        expectAcquireFailure(gate);
+        check(!gate.requireStop(attempt), "stop request bypassed release");
+        check(!gate.confirmStopped(attempt), "stop confirmation bypassed release");
+        check(gate.confirmReleased(attempt), "release rejected");
+        var next = gate.beginAcquire();
+        check(!gate.confirmReleased(attempt), "stale release accepted");
+        check(gate.requireStop(next), "new attempt unavailable");
+    }
+
+    private static void expiredPublicationRequiresReconciliation() {
+        var gate = new LocalHostGate();
+        var attempt = gate.beginAcquire();
+        check(gate.acceptGrant(attempt, 5, 3, deadline(), 0, 0), "grant rejected");
+        check(gate.snapshotVerified(attempt, 3, 0, 0), "snapshot rejected");
+        check(gate.beginHosting(attempt, 0, 0), "host start failed");
+        check(gate.beginGracefulStop(attempt, 0, 0), "shutdown rejected");
+        check(gate.serverStoppedForSnapshot(attempt, 0, 0), "stop rejected");
+        check(gate.finalSnapshotVerified(attempt, 3, 0, 0), "snapshot rejected");
+        check(!gate.publicationConfirmed(attempt, 4, 27_000_000_000L, 27_000), "late acknowledgement accepted");
+        check(gate.phase() == LocalHostGate.Phase.STOP_REQUIRED, "expiry did not require stop");
+        check(!gate.mayPublish(attempt, 27_000_000_000L, 27_000), "expired publication allowed");
+        expectAcquireFailure(gate);
     }
 
     private static ConservativeLeaseDeadline deadline() {

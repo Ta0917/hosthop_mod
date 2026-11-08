@@ -44,6 +44,7 @@ Shared world hosting research prototype. No synchronization features are enabled
 '''
 
 ${relay_mixin}
+${stop_mixin}
 
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
 #[[mixins]]
