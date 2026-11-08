@@ -27,7 +27,7 @@ public final class HostHopScreen extends Screen {
     private final Screen parent;
     private final AtomicLong request = new AtomicLong();
     private Component status = Component.translatable("screen.hosthop.initial");
-    private Button register, authorize, join;
+    private Button register, authorize, authorizeSnapshot, join;
     private EditBox initialWorld;
     private boolean startedHere;
     private volatile DriveCredentialManager activeAuthorization;
@@ -36,18 +36,41 @@ public final class HostHopScreen extends Screen {
 
     @Override protected void init() {
         int x = width / 2 - 105;
-        initialWorld = addRenderableWidget(new EditBox(font, x, height / 2 - 58, 210, 20, Component.translatable("screen.hosthop.initial_world")));
+        initialWorld = addRenderableWidget(new EditBox(font, x, height / 2 - 70, 210, 20, Component.translatable("screen.hosthop.initial_world")));
         initialWorld.setMaxLength(128);
         initialWorld.setHint(Component.translatable("screen.hosthop.initial_world"));
         register = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.register"), button -> registerInvitation())
-                .bounds(x, height / 2 - 32, 210, 20).build());
+                .bounds(x, height / 2 - 44, 210, 20).build());
         authorize = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.authorize"), button -> authorizeDrive())
-                .bounds(x, height / 2 - 6, 210, 20).build());
+                .bounds(x, height / 2 - 18, 210, 20).build());
+        authorizeSnapshot = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.authorize_snapshot"), button -> authorizeSnapshot())
+                .bounds(x, height / 2 + 8, 210, 20).build());
         join = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.join"), button -> joinHost())
-                .bounds(x, height / 2 + 20, 210, 20).build());
+                .bounds(x, height / 2 + 34, 210, 20).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
-                .bounds(x, height / 2 + 53, 210, 20).build());
+                .bounds(x, height / 2 + 62, 210, 20).build());
         status = Component.translatable(HostWorldRuntime.lastStatus());
+    }
+
+    private void authorizeSnapshot() {
+        long id = request.incrementAndGet();
+        busy(true, "screen.hosthop.authorizing_snapshot");
+        CompletableFuture.runAsync(() -> {
+            try {
+                var vault = new WindowsSecretStore(secretPath());
+                var invitation = Invitation.fromSecrets(vault.load());
+                var authority = new LeaseAuthorityClient(URI.create(invitation.authority()), invitation.memberToken());
+                var snapshot = authority.snapshot(invitation.world());
+                var manager = new DriveCredentialManager(vault, new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret()));
+                activeAuthorization = manager;
+                manager.authorizeFile(snapshot.object().fileId(), invitation.folder(), uri -> Minecraft.getInstance().execute(() -> {
+                    if (id == request.get() && Minecraft.getInstance().gui.screen() == this) Util.getPlatform().openUri(uri);
+                    else manager.cancelAuthorization();
+                }));
+                finish(id, "screen.hosthop.snapshot_authorized");
+            } catch (Exception failure) { finish(id, "screen.hosthop.snapshot_authorize_failed"); }
+            finally { activeAuthorization = null; }
+        });
     }
 
     private void authorizeDrive() {
@@ -135,7 +158,7 @@ public final class HostHopScreen extends Screen {
             if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(false, message);
         });
     }
-    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; join.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
+    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
 
     @Override public void onClose() {
         request.incrementAndGet();
@@ -147,7 +170,7 @@ public final class HostHopScreen extends Screen {
 
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-        graphics.centeredText(font, title, width / 2, height / 2 - 105, -1);
-        graphics.centeredText(font, status, width / 2, height / 2 - 84, -1);
+        graphics.centeredText(font, title, width / 2, height / 2 - 117, -1);
+        graphics.centeredText(font, status, width / 2, height / 2 - 96, -1);
     }
 }

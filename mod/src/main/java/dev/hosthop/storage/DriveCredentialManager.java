@@ -33,6 +33,7 @@ public final class DriveCredentialManager {
             if (generation != authorizationGeneration.get()) throw new IOException("Drive authorization cancelled");
             openBrowser.accept(session.authorizationUri());
             var tokens = session.await(Duration.ofMinutes(5));
+            if (generation != authorizationGeneration.get()) throw new IOException("Drive authorization cancelled");
             if (tokens.refreshToken() == null) throw new IOException("Google did not provide a refresh token");
             synchronized (this) { save(tokens); cache(tokens); }
         } finally {
@@ -45,6 +46,31 @@ public final class DriveCredentialManager {
         authorizationGeneration.incrementAndGet();
         var session = activeSession;
         if (session != null) session.close();
+    }
+
+    /** Explicitly grants access to a snapshot created by another member. */
+    public void authorizeFile(String expectedFile, String expectedFolder, Consumer<URI> openBrowser) throws IOException, InterruptedException {
+        if (openBrowser == null || expectedFile == null || !expectedFile.matches("[A-Za-z0-9_-]{1,200}")
+                || expectedFolder == null || !expectedFolder.matches("[A-Za-z0-9_-]{1,200}"))
+            throw new IllegalArgumentException("Invalid file authorization");
+        if (!authorizing.compareAndSet(false, true)) throw new IOException("Drive authorization already in progress");
+        long generation = authorizationGeneration.get();
+        try (var session = authorization.begin(expectedFile)) {
+            activeSession = session;
+            if (generation != authorizationGeneration.get()) throw new IOException("Drive authorization cancelled");
+            openBrowser.accept(session.authorizationUri());
+            var selected = session.await(Duration.ofMinutes(5));
+            if (generation != authorizationGeneration.get()) throw new IOException("Drive authorization cancelled");
+            var secrets = vault.load();
+            if (!expectedFolder.equals(secrets.get(FOLDER))) throw new IOException("Drive folder does not match invitation");
+            String refresh = selected.refreshToken() != null ? selected.refreshToken() : secrets.get(REFRESH);
+            if (refresh == null) throw new IOException("Google did not provide a refresh token");
+            var tokens = authorization.refresh(refresh, expectedFolder);
+            synchronized (this) { save(tokens); cache(tokens); }
+        } finally {
+            activeSession = null;
+            authorizing.set(false);
+        }
     }
 
     /** Refreshes credentials if needed; never opens a browser automatically. */

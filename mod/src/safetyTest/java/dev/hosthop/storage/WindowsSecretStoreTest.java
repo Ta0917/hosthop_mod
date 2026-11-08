@@ -27,6 +27,22 @@ public final class WindowsSecretStoreTest {
             var manager = new DriveCredentialManager(store, auth);
             check(manager.access().accessToken().equals("access") && manager.access().folderId().equals("folder") && calls.get() == 1);
             check(store.load().get("drive_refresh_token").equals("new-refresh") && store.load().get("member").equals("member-secret"));
+            manager.authorizeFile("snapshot-id", "folder", uri -> {
+                try {
+                    var query = new java.util.HashMap<String, String>();
+                    for (String pair : uri.getRawQuery().split("&")) {
+                        String[] parts = pair.split("=", 2);
+                        query.put(java.net.URLDecoder.decode(parts[0], StandardCharsets.UTF_8), java.net.URLDecoder.decode(parts[1], StandardCharsets.UTF_8));
+                    }
+                    check(query.get("file_ids").equals("snapshot-id"));
+                    String callback = query.get("redirect_uri") + "?state=" + query.get("state") + "&code=test-code&picked_file_ids=snapshot-id";
+                    var response = java.net.http.HttpClient.newHttpClient().send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(callback)).build(),
+                            java.net.http.HttpResponse.BodyHandlers.discarding());
+                    check(response.statusCode() == 200);
+                } catch (Exception failure) { throw new RuntimeException(failure); }
+            });
+            check(manager.access().folderId().equals("folder") && store.load().get("drive_folder_id").equals("folder"));
+            check(store.load().get("member").equals("member-secret"));
             Files.write(file, new byte[] { 1, 2, 3 });
             try { store.load(); throw new AssertionError("corrupted secrets accepted"); }
             catch (IOException expected) { }
