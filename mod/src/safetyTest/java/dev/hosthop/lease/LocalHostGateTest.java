@@ -9,7 +9,28 @@ public final class LocalHostGateTest {
         gracefulPublicationRequiresOrderedEvidence();
         expiredPublicationRequiresReconciliation();
         publicationJournalPreservesEvidence();
+        recoveryBlocksNewHostUntilReceiptMatches();
         System.out.println("LocalHostGate safety checks passed");
+    }
+
+    private static void recoveryBlocksNewHostUntilReceiptMatches() throws Exception {
+        var directory = java.nio.file.Files.createTempDirectory("hosthop-recovery-test-");
+        var path = directory.resolve("pending");
+        try {
+            var operation = publication(6, 11, "old-op", "digest");
+            PendingPublicationJournal.create(path, operation);
+            var restarted = new LocalHostGate();
+            var recovery = restarted.beginRecovery(PendingPublicationJournal.read(path));
+            expectAcquireFailure(restarted);
+            check(!restarted.confirmStopped(recovery), "recovery allowed unverified stop");
+            check(!restarted.publicationReconciled(recovery, publication(6, 11, "old-op", "wrong")), "recovery accepted wrong receipt");
+            check(restarted.publicationReconciled(recovery, operation), "matching recovery rejected");
+            check(restarted.confirmStopped(recovery), "recovery could not finish");
+            check(restarted.beginAcquire() != null, "acquisition unavailable after recovery");
+        } finally {
+            java.nio.file.Files.deleteIfExists(path);
+            java.nio.file.Files.delete(directory);
+        }
     }
 
     private static void publicationJournalPreservesEvidence() throws Exception {

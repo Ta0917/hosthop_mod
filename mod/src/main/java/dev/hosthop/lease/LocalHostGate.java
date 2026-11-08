@@ -28,6 +28,20 @@ public final class LocalHostGate {
         return current;
     }
 
+    /**
+     * Restore an unresolved, locally persisted request before allowing acquisition.
+     * The caller must discover journals on startup and authenticate any receipt.
+     */
+    public synchronized Attempt beginRecovery(PublicationRecord pending) {
+        if (phase != Phase.IDLE) throw new IllegalStateException("A host attempt is already active");
+        if (pending == null) throw new IllegalArgumentException("Missing recovery record");
+        current = new Attempt();
+        publication = pending;
+        publicationUncertain = true;
+        phase = Phase.STOP_REQUIRED;
+        return current;
+    }
+
     public synchronized boolean acceptGrant(Attempt attempt, long epoch, long generation,
                                             ConservativeLeaseDeadline grant, long nowNanos, long nowMillis) {
         if (attempt == null || attempt != current || phase != Phase.ACQUIRING) return false;
