@@ -56,15 +56,22 @@ public final class LeaseAuthorityClient {
     }
 
     public Grant acquire(String world, String lease, int duration, long marginSeconds) throws IOException, InterruptedException {
-        return request("acquire", world, lease, duration, 0, marginSeconds);
+        return request("acquire", world, lease, duration, 0, null, marginSeconds);
+    }
+
+    /** Recover a lost acquisition response; owner and duration must match the original request. */
+    public Grant lookupAcquisition(String world, String lease, int duration, String expectedOwner, long marginSeconds)
+            throws IOException, InterruptedException {
+        if (expectedOwner == null || !expectedOwner.matches(ID)) throw new IllegalArgumentException("Invalid owner");
+        return request("acquire-status", world, lease, duration, 0, expectedOwner, marginSeconds);
     }
 
     public Grant renew(String world, String lease, int duration, long expectedEpoch, long marginSeconds) throws IOException, InterruptedException {
         if (expectedEpoch < 1) throw new IllegalArgumentException("Invalid epoch");
-        return request("renew", world, lease, duration, expectedEpoch, marginSeconds);
+        return request("renew", world, lease, duration, expectedEpoch, null, marginSeconds);
     }
 
-    private Grant request(String route, String world, String lease, int duration, long expectedEpoch, long margin) throws IOException, InterruptedException {
+    private Grant request(String route, String world, String lease, int duration, long expectedEpoch, String expectedOwner, long margin) throws IOException, InterruptedException {
         if (world == null || !world.matches(ID) || lease == null || !lease.matches(ID) || duration < 1 || duration > 300)
             throw new IllegalArgumentException("Invalid lease request");
         String body = "{\"world\":\"" + world + "\",\"lease\":\"" + lease + "\",\"duration\":" + duration
@@ -77,11 +84,14 @@ public final class LeaseAuthorityClient {
         Reply reply = exchange.send(request);
         if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES)
             throw new IOException("Lease authority did not grant the request");
-        var fields = parseNumbers(reply.body());
-        long epoch = required(fields, "epoch");
-        long generation = required(fields, "generation");
-        long serverNow = required(fields, "server_now");
-        long expires = required(fields, "expires");
+        var fields = parseFields(reply.body());
+        long epoch = required(fields.numbers(), "epoch");
+        long generation = required(fields.numbers(), expectedOwner == null ? "generation" : "base_generation");
+        long serverNow = required(fields.numbers(), "server_now");
+        long expires = required(fields.numbers(), "expires");
+        if (expectedOwner != null && (!expectedOwner.equals(fields.owner())
+                || required(fields.numbers(), "duration_seconds") != duration || required(fields.numbers(), "active") != 1))
+            throw new IOException("Acquisition does not match active request");
         if (epoch < 1 || generation < 0 || serverNow < 0 || (expectedEpoch != 0 && epoch != expectedEpoch)) throw new IOException("Invalid lease grant");
         try {
             var deadline = ConservativeLeaseDeadline.fromGrant(startNanos, startMillis, serverNow, expires, margin);
@@ -98,25 +108,32 @@ public final class LeaseAuthorityClient {
         return value;
     }
 
-    private static Map<String, Long> parseNumbers(String text) throws IOException {
+    private record Fields(Map<String, Long> numbers, String owner) {}
+
+    private static Fields parseFields(String text) throws IOException {
         var values = new HashMap<String, Long>();
         var names = new HashSet<String>();
+        String owner = null;
         try (var reader = new JsonReader(new StringReader(text))) {
             reader.setLenient(false);
             reader.beginObject();
             while (reader.hasNext()) {
                 String name = reader.nextName();
                 if (!names.add(name)) throw new IOException("Duplicate response field");
-                if (name.equals("epoch") || name.equals("generation") || name.equals("server_now") || name.equals("expires")) {
+                if (name.equals("epoch") || name.equals("generation") || name.equals("base_generation")
+                        || name.equals("duration_seconds") || name.equals("active") || name.equals("server_now") || name.equals("expires")) {
                     if (reader.peek() != JsonToken.NUMBER) throw new IOException("Invalid response field");
                     String value = reader.nextString();
                     if (!value.matches("-?(0|[1-9][0-9]*)")) throw new IOException("Invalid response number");
                     values.put(name, Long.parseLong(value));
+                } else if (name.equals("owner")) {
+                    if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid response owner");
+                    owner = reader.nextString();
                 } else reader.skipValue();
             }
             reader.endObject();
             if (reader.peek() != JsonToken.END_DOCUMENT) throw new IOException("Trailing response data");
-            return values;
+            return new Fields(values, owner);
         } catch (IllegalStateException | NumberFormatException invalid) {
             throw new IOException("Invalid lease response", invalid);
         }

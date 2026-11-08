@@ -13,7 +13,7 @@ public final class LeaseAuthorityClientTest {
                 "{\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         var client = new LeaseAuthorityClient(URI.create("https://authority.example/"), "a".repeat(43),
                 request -> {
-                    check(request.uri().toString().equals("https://authority.example/acquire") || request.uri().toString().equals("https://authority.example/renew"));
+                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status").contains(request.uri().getPath()));
                     check(request.headers().firstValue("Authorization").orElseThrow().equals("Bearer " + "a".repeat(43)));
                     return reply.get();
                 }, nanos::get, millis::get);
@@ -21,6 +21,12 @@ public final class LeaseAuthorityClientTest {
         check(grant.epoch() == 4 && grant.generation() == 3 && grant.deadline().isUsable(1_000_000_000L, 1000));
         check(client.renew("world", "lease", 30, 4, 2).epoch() == 4);
         expectFailure(() -> client.renew("world", "lease", 30, 5, 2));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"owner\":\"owner\",\"epoch\":4,\"base_generation\":3,\"duration_seconds\":30,\"active\":1,\"server_now\":100,\"expires\":130}"));
+        check(client.lookupAcquisition("world", "lease", 30, "owner", 2).generation() == 3);
+        expectFailure(() -> client.lookupAcquisition("world", "lease", 30, "other", 2));
+        expectFailure(() -> client.lookupAcquisition("world", "lease", 29, "owner", 2));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"owner\":\"owner\",\"epoch\":4,\"base_generation\":3,\"duration_seconds\":30,\"active\":0,\"server_now\":100,\"expires\":130}"));
+        expectFailure(() -> client.lookupAcquisition("world", "lease", 30, "owner", 2));
         reply.set(new LeaseAuthorityClient.Reply(409, "{}"));
         expectFailure(() -> client.acquire("world", "lease", 30, 2));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"epoch\":5,\"generation\":3,\"server_now\":100,\"expires\":130}"));
