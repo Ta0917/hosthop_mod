@@ -14,6 +14,7 @@ const acquire = load('acquire.sql');
 const acquireStatus = load('acquire_status.sql');
 const renew = load('renew.sql');
 const commit = load('commit.sql');
+const commitStatus = load('commit_status.sql');
 const release = load('release.sql');
 const mf = new Miniflare(convertV4MiniflareOptions({
   modules: true,
@@ -51,8 +52,9 @@ try {
   const retries = await Promise.all(Array.from({ length: 12 }, () =>
     db.prepare(commit).bind('world', 'same-operation', winner.owner, winner.lease, epoch, 0, 'digest-a').all()));
   check(retries.reduce((count, result) => count + result.results.length, 0) === 1, 'same request changed state more than once');
-  const recorded = await db.prepare('SELECT owner,lease_id,epoch,previous_generation,digest,result_generation FROM committed_operations WHERE world_id=?1 AND operation_id=?2').bind('world', 'same-operation').first();
-  check(recorded.owner === winner.owner && recorded.lease_id === winner.lease && recorded.epoch === epoch && recorded.previous_generation === 0 && recorded.digest === 'digest-a' && recorded.result_generation === 1, 'retry record differs from original request');
+  const recorded = await db.prepare(commitStatus).bind('world', 'same-operation').first();
+  check(recorded.world_id === 'world' && recorded.operation_id === 'same-operation' && recorded.owner === winner.owner && recorded.lease_id === winner.lease && recorded.epoch === epoch && recorded.previous_generation === 0 && recorded.digest === 'digest-a' && recorded.result_generation === 1, 'retry record differs from original request');
+  check(!(await db.prepare(commitStatus).bind('world', 'missing').first()), 'missing operation had a receipt');
   check((await db.prepare(commit).bind('world', 'same-operation', winner.owner, winner.lease, epoch, 1, 'different').all()).results.length === 0, 'operation ID reuse changed state');
   const conflicting = await Promise.all(['digest-b', 'digest-c'].map((digest, i) =>
     db.prepare(commit).bind('world', `competing-${i}`, winner.owner, winner.lease, epoch, 1, digest).all()));
@@ -91,6 +93,7 @@ try {
   check(receipt.owner === 'next-owner' && receipt.epoch === next.epoch && receipt.operation_id === 'final-operation' && receipt.result_generation === 3, 'release receipt differs');
   const latest = await db.prepare(acquire).bind('world', 'third-owner', 'third-lease', 120).first();
   check(latest.epoch === next.epoch + 1 && latest.generation === 3, 'successor did not acquire released generation');
+  check((await db.prepare(commitStatus).bind('world', 'final-operation').first()).digest === 'digest-final', 'later acquisition erased commit receipt');
   check((await db.prepare(release).bind('world', 'next-owner', 'fresh-lease', next.epoch, 'final-operation', 3).all()).results.length === 0, 'release retry affected successor');
   console.log('PASS: Miniflare D1 bindings: leases, retries, renewals, commits, releases, concurrency, rollback');
 } finally {

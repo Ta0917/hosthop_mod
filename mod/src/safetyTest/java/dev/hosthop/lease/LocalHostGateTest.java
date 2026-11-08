@@ -27,9 +27,12 @@ public final class LocalHostGateTest {
         var extension = ConservativeLeaseDeadline.fromGrant(5_000_000_000L, 5000, 105, 135, 2);
         check(gate.acceptRenewal(attempt, renewal, 4, extension, 6_000_000_000L, 6000), "snapshot renewal rejected");
         check(gate.finalSnapshotVerified(attempt, 7, 6_000_000_000L, 6000), "verified snapshot rejected");
-        check(gate.mayPublish(attempt, 6_000_000_000L, 6000), "publication rejected");
-        check(!gate.publicationConfirmed(attempt, 9, 6_000_000_000L, 6000), "incorrect generation accepted");
-        check(gate.publicationConfirmed(attempt, 8, 6_000_000_000L, 6000), "commit confirmation rejected");
+        var operation = publication(4, 7, "op", "digest");
+        check(!gate.mayPublish(attempt, publication(3, 7, "op", "digest"), 6_000_000_000L, 6000), "wrong epoch accepted");
+        check(gate.mayPublish(attempt, operation, 6_000_000_000L, 6000), "publication rejected");
+        check(!gate.mayPublish(attempt, publication(4, 7, "other", "digest"), 6_000_000_000L, 6000), "operation changed during retry");
+        check(!gate.publicationConfirmed(attempt, publication(4, 7, "op", "wrong"), 6_000_000_000L, 6000), "incorrect digest accepted");
+        check(gate.publicationConfirmed(attempt, operation, 6_000_000_000L, 6000), "commit confirmation rejected");
         expectAcquireFailure(gate);
         check(!gate.requireStop(attempt), "stop request bypassed release");
         check(!gate.confirmStopped(attempt), "stop confirmation bypassed release");
@@ -48,19 +51,27 @@ public final class LocalHostGateTest {
         check(gate.beginGracefulStop(attempt, 0, 0), "shutdown rejected");
         check(gate.serverStoppedForSnapshot(attempt, 0, 0), "stop rejected");
         check(gate.finalSnapshotVerified(attempt, 3, 0, 0), "snapshot rejected");
-        check(!gate.publicationConfirmed(attempt, 4, 0, 0), "unsent publication confirmed");
-        check(gate.mayPublish(attempt, 0, 0), "publication rejected");
-        check(!gate.publicationConfirmed(attempt, 4, 27_000_000_000L, 27_000), "late acknowledgement accepted");
+        var operation = publication(5, 3, "op", "digest");
+        check(!gate.publicationConfirmed(attempt, operation, 0, 0), "unsent publication confirmed");
+        check(gate.mayPublish(attempt, operation, 0, 0), "publication rejected");
+        check(!gate.publicationConfirmed(attempt, operation, 27_000_000_000L, 27_000), "late acknowledgement accepted");
         check(gate.phase() == LocalHostGate.Phase.STOP_REQUIRED, "expiry did not require stop");
-        check(!gate.mayPublish(attempt, 27_000_000_000L, 27_000), "expired publication allowed");
+        check(!gate.mayPublish(attempt, operation, 27_000_000_000L, 27_000), "expired publication allowed");
         expectAcquireFailure(gate);
         check(!gate.confirmStopped(attempt), "uncertain publication bypassed reconciliation");
-        check(gate.publicationReconciled(attempt), "reconciliation rejected");
+        check(!gate.publicationReconciled(attempt, null), "missing receipt accepted");
+        check(!gate.publicationReconciled(attempt, publication(5, 3, "other", "digest")), "wrong operation reconciled");
+        check(!gate.publicationReconciled(attempt, publication(5, 3, "op", "wrong")), "wrong digest reconciled");
+        check(gate.publicationReconciled(attempt, operation), "reconciliation rejected");
         check(gate.confirmStopped(attempt), "reconciled stop rejected");
     }
 
     private static ConservativeLeaseDeadline deadline() {
         return ConservativeLeaseDeadline.fromGrant(0, 0, 100, 130, 2);
+    }
+
+    private static PublicationRecord publication(long epoch, long generation, String operation, String digest) {
+        return new PublicationRecord("world", operation, "owner", "lease", epoch, generation, digest, generation + 1);
     }
 
     private static void requiresVerifiedGenerationAndLiveLease() {

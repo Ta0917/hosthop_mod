@@ -19,6 +19,7 @@ public final class LocalHostGate {
     private long generation;
     private boolean snapshotVerified;
     private boolean publicationUncertain;
+    private PublicationRecord publication;
 
     public synchronized Attempt beginAcquire() {
         if (phase != Phase.IDLE) throw new IllegalStateException("Prior host is not confirmed stopped");
@@ -112,18 +113,21 @@ public final class LocalHostGate {
     }
 
     /** The remote commit must independently fence the lease and expected generation. */
-    public synchronized boolean mayPublish(Attempt attempt, long nowNanos, long nowMillis) {
+    public synchronized boolean mayPublish(Attempt attempt, PublicationRecord operation, long nowNanos, long nowMillis) {
         if (attempt == null || attempt != current || phase != Phase.PUBLISHING || !checkDeadline(nowNanos, nowMillis)) return false;
+        if (operation == null || operation.epoch() != epoch || operation.previousGeneration() != generation
+                || (publication != null && !publication.equals(operation))) return false;
         // Once a request may be sent, a lost response requires authoritative reconciliation.
+        publication = operation;
         publicationUncertain = true;
         return true;
     }
 
     /** Caller must authenticate and match the acknowledgement to its operation. */
-    public synchronized boolean publicationConfirmed(Attempt attempt, long committedGeneration, long nowNanos, long nowMillis) {
+    public synchronized boolean publicationConfirmed(Attempt attempt, PublicationRecord receipt, long nowNanos, long nowMillis) {
         if (attempt == null || attempt != current || phase != Phase.PUBLISHING || !publicationUncertain) return false;
-        if (!checkDeadline(nowNanos, nowMillis) || generation == Long.MAX_VALUE || committedGeneration != generation + 1) return false;
-        generation = committedGeneration;
+        if (!checkDeadline(nowNanos, nowMillis) || !publication.equals(receipt)) return false;
+        generation = receipt.resultGeneration();
         publicationUncertain = false;
         pendingRenewal = null;
         phase = Phase.RELEASE_REQUIRED;
@@ -145,8 +149,9 @@ public final class LocalHostGate {
     }
 
     /** Caller must reconcile the operation against authenticated authoritative records first. */
-    public synchronized boolean publicationReconciled(Attempt attempt) {
+    public synchronized boolean publicationReconciled(Attempt attempt, PublicationRecord receipt) {
         if (attempt == null || attempt != current || phase != Phase.STOP_REQUIRED || !publicationUncertain) return false;
+        if (!publication.equals(receipt)) return false;
         publicationUncertain = false;
         return true;
     }
@@ -164,6 +169,7 @@ public final class LocalHostGate {
         deadline = null;
         snapshotVerified = false;
         publicationUncertain = false;
+        publication = null;
         phase = Phase.IDLE;
     }
 
