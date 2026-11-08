@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /** Google Drive binary snapshots; caller supplies a short-lived OAuth access token. */
-public final class GoogleDriveSnapshotStore {
+public final class GoogleDriveSnapshotStore implements SnapshotStore {
     private static final int CHUNK = 8 * 1024 * 1024;
     private static final int MAX_REPLY = 64 * 1024;
     private static final long MAX_SIZE = 64L * 1024 * 1024 * 1024;

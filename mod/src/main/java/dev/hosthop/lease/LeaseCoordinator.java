@@ -19,6 +19,7 @@ public final class LeaseCoordinator {
         private final int duration;
         private final long margin;
         private volatile long epoch;
+        private volatile long generation = -1;
 
         private Acquisition(LeaseCoordinator owner, LocalHostGate.Attempt attempt, String world, String lease,
                             String principal, int duration, long margin) {
@@ -26,6 +27,11 @@ public final class LeaseCoordinator {
             this.principal = principal; this.duration = duration; this.margin = margin;
         }
         public LocalHostGate.Attempt attempt() { return attempt; }
+        public String world() { return world; }
+        public String lease() { return lease; }
+        public String principal() { return principal; }
+        public long epoch() { return epoch; }
+        public long generation() { return generation; }
     }
 
     public LeaseCoordinator(LocalHostGate gate, LeaseAuthorityClient client, LongSupplier nanos, LongSupplier millis) {
@@ -57,6 +63,7 @@ public final class LeaseCoordinator {
 
     private boolean accept(Acquisition acquisition, LeaseAuthorityClient.Grant grant) {
         if (!gate.acceptGrant(acquisition.attempt, grant.epoch(), grant.generation(), grant.deadline(), nanos.getAsLong(), millis.getAsLong())) return false;
+        acquisition.generation = grant.generation();
         acquisition.epoch = grant.epoch();
         return true;
     }

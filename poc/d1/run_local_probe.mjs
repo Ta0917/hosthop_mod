@@ -28,7 +28,7 @@ function run(args, expectedFailure = false) {
 }
 
 function commit(op, generation, digest) {
-  return bindConstants(sql, ["'test-world'", `'${op}'`, "'test-owner'", "'lease-1'", '1', String(generation), `'${digest}'`]);
+  return bindConstants(sql, ["'test-world'", `'${op}'`, "'test-owner'", "'lease-1'", '1', String(generation), `'${digest}'`, "'file-id'", '42']);
 }
 function check(condition, message) { if (!condition) throw new Error(message); }
 function bindConstants(statement, values) {

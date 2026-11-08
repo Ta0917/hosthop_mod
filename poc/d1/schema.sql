@@ -7,6 +7,8 @@ CREATE TABLE worlds (
     expires INTEGER NOT NULL DEFAULT 0,
     generation INTEGER NOT NULL DEFAULT 0,
     digest TEXT,
+    object_id TEXT,
+    object_size INTEGER,
     endpoint TEXT,
     endpoint_revision INTEGER NOT NULL DEFAULT 0
 );
@@ -66,6 +68,8 @@ CREATE TABLE committed_operations (
     epoch INTEGER NOT NULL,
     previous_generation INTEGER NOT NULL,
     digest TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    object_size INTEGER NOT NULL,
     result_generation INTEGER NOT NULL,
     PRIMARY KEY (world_id, operation_id),
     UNIQUE (world_id, result_generation)
@@ -73,7 +77,8 @@ CREATE TABLE committed_operations (
 
 CREATE TRIGGER apply_committed_operation AFTER INSERT ON committed_operations
 BEGIN
-    UPDATE worlds SET generation = NEW.result_generation, digest = NEW.digest
+    UPDATE worlds SET generation = NEW.result_generation, digest = NEW.digest,
+      object_id = NEW.object_id, object_size = NEW.object_size
     WHERE id = NEW.world_id AND owner = NEW.owner AND lease_id = NEW.lease_id AND epoch = NEW.epoch
       AND generation = NEW.previous_generation AND expires > unixepoch('now');
     SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'stale commit') END;

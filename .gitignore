@@ -7,3 +7,6 @@ run/
 *.zip
 .tools/
 .wrangler/
+service/wrangler.toml
+service/.dev.vars
+service/*-secrets.json

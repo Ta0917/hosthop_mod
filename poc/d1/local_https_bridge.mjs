@@ -10,28 +10,43 @@ const require = createRequire(import.meta.url);
 const { Miniflare, convertV4MiniflareOptions } = require(resolve(process.argv[2]));
 const here = dirname(fileURLToPath(import.meta.url));
 const load = name => readFileSync(join(here, name), 'utf8');
-const sql = Object.fromEntries(Object.entries({ acquire: 'acquire.sql', renew: 'renew.sql', acquireStatus: 'acquire_status.sql',
-  endpointUpdate: 'endpoint_update.sql', endpointStatus: 'endpoint_status.sql', endpointRevision: 'endpoint_revision.sql' })
-  .map(([key, name]) => [key, load(name)]));
 const schema = load('schema.sql').replace(/^--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
 const token = 'a'.repeat(43);
 const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))),
   value => value.toString(16).padStart(2, '0')).join('');
-const script = `import {createLeaseService} from './lease_service.mjs';\nexport default createLeaseService(${JSON.stringify(sql)});`;
+let uploadedObject = null;
+const built = name => readFileSync(join(here, '..', '..', 'service', 'build', name), 'utf8');
 const mf = new Miniflare(convertV4MiniflareOptions({
-  modules: [{ type: 'ESModule', path: 'worker.mjs', contents: script },
-    { type: 'ESModule', path: 'lease_service.mjs', contents: load('lease_service.mjs') }],
+  modules: ['worker.mjs', 'sql.mjs', 'lease_service.mjs', 'drive_verifier.mjs']
+    .map(path => ({ type: 'ESModule', path, contents: built(path) })),
   compatibilityDate: '2026-11-01', d1Databases: { DB: '00000000-0000-0000-0000-000000000000' },
-  bindings: { MEMBERS: [{ world: 'world', owner: 'owner', tokenHash: hash }] },
+  bindings: { MEMBERS_JSON: JSON.stringify([{ world: 'world', owner: 'owner', tokenHash: hash }]),
+    WORLDS_JSON: JSON.stringify([{ id: 'world', folder: 'folder' }]) },
+  outboundService: async request => {
+    if (uploadedObject && request.url.startsWith(`https://www.googleapis.com/drive/v3/files/${uploadedObject.id}?`)
+        && request.headers.get('Authorization') === 'Bearer drive-test-token')
+      return Response.json(uploadedObject);
+    return new Response(null, { status: 403 });
+  },
 }));
 const db = await mf.getD1Database('DB');
 await db.batch(schema.map(statement => db.prepare(statement)));
 await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('world').run();
 let dropFirstAcquisitionReply = true;
+let dropFirstCommitReply = true;
+let dropFirstReleaseReply = true;
 const server = https.createServer({ pfx: readFileSync(process.argv[3]), passphrase: 'test-password' }, async (req, res) => {
   try {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
+    if (req.url === '/test-object') {
+      const object = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      uploadedObject = { id: object.fileId, name: `${object.digest}.zip`, size: String(object.size),
+        sha256Checksum: object.digest, parents: ['folder'], trashed: false };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+      return;
+    }
     if (req.url === '/test-expire') {
       await db.prepare("UPDATE worlds SET expires=unixepoch('now') WHERE id=?1").bind('world').run();
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -44,6 +59,16 @@ const server = https.createServer({ pfx: readFileSync(process.argv[3]), passphra
     if (dropFirstAcquisitionReply && req.url === '/acquire' && response.status === 200) {
       dropFirstAcquisitionReply = false;
       req.socket.destroy(); // Simulate a committed grant whose response never arrives.
+      return;
+    }
+    if (dropFirstCommitReply && req.url === '/commit' && response.status === 200) {
+      dropFirstCommitReply = false;
+      req.socket.destroy();
+      return;
+    }
+    if (dropFirstReleaseReply && req.url === '/release' && response.status === 200) {
+      dropFirstReleaseReply = false;
+      req.socket.destroy();
       return;
     }
     res.writeHead(response.status, Object.fromEntries(response.headers));

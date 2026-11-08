@@ -1,0 +1,10 @@
+# Copy to an untracked local configuration after creating the D1 database.
+# Do not place OAuth tokens or member tokens here. Deployment is not automatic.
+name = "hosthop"
+main = "build/worker.mjs"
+compatibility_date = "2026-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hosthop"
+database_id = "REPLACE_WITH_DATABASE_ID"

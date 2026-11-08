@@ -164,6 +164,7 @@ public final class LocalHostGateTest {
         check(!gate.publicationReconciled(attempt, null), "missing receipt accepted");
         check(!gate.publicationReconciled(attempt, publication(5, 3, "other", "digest")), "wrong operation reconciled");
         check(!gate.publicationReconciled(attempt, publication(5, 3, "op", "wrong")), "wrong digest reconciled");
+        check(!gate.publicationReconciled(attempt, new PublicationRecord("world", "op", "owner", "lease", 5, 3, "digest", "other-object", 42, 4)), "wrong object reconciled");
         check(gate.publicationReconciled(attempt, operation), "reconciliation rejected");
         check(gate.confirmStopped(attempt), "reconciled stop rejected");
     }
@@ -173,7 +174,7 @@ public final class LocalHostGateTest {
     }
 
     private static PublicationRecord publication(long epoch, long generation, String operation, String digest) {
-        return new PublicationRecord("world", operation, "owner", "lease", epoch, generation, digest, generation + 1);
+        return new PublicationRecord("world", operation, "owner", "lease", epoch, generation, digest, "object", 42, generation + 1);
     }
 
     private static void requiresVerifiedGenerationAndLiveLease() {

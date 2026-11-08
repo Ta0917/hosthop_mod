@@ -9,20 +9,18 @@ const require = createRequire(import.meta.url);
 const { Miniflare, convertV4MiniflareOptions } = require(resolve(process.argv[2]));
 const here = dirname(fileURLToPath(import.meta.url));
 const load = name => readFileSync(join(here, name), 'utf8');
-const sql = Object.fromEntries(Object.entries({ acquire: 'acquire.sql', renew: 'renew.sql', acquireStatus: 'acquire_status.sql',
-  endpointUpdate: 'endpoint_update.sql', endpointStatus: 'endpoint_status.sql', endpointRevision: 'endpoint_revision.sql' })
-  .map(([key, path]) => [key, load(path)]));
 const schema = load('schema.sql').replace(/^--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
 const token = 'q'.repeat(43);
 const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))),
   value => value.toString(16).padStart(2, '0')).join('');
-const worker = `import {createLeaseService} from './lease_service.mjs';\nexport default createLeaseService(${JSON.stringify(sql)});`;
+const built = name => readFileSync(join(here, '..', '..', 'service', 'build', name), 'utf8');
 const mf = new Miniflare(convertV4MiniflareOptions({
-  modules: [{ type: 'ESModule', path: 'worker.mjs', contents: worker },
-    { type: 'ESModule', path: 'lease_service.mjs', contents: load('lease_service.mjs') }],
+  modules: ['worker.mjs', 'sql.mjs', 'lease_service.mjs', 'drive_verifier.mjs']
+    .map(path => ({ type: 'ESModule', path, contents: built(path) })),
   compatibilityDate: '2026-11-01',
   d1Databases: { DB: '00000000-0000-0000-0000-000000000000' },
-  bindings: { MEMBERS: [{ world: 'test-world', owner: 'test-owner', tokenHash: hash }] },
+  bindings: { MEMBERS_JSON: JSON.stringify([{ world: 'test-world', owner: 'test-owner', tokenHash: hash }]),
+    WORLDS_JSON: JSON.stringify([{ id: 'test-world', folder: 'test-folder' }]) },
 }));
 const check = (value, message) => { if (!value) throw new Error(message); };
 try {

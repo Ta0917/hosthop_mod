@@ -26,17 +26,17 @@ class D1SqlTest(unittest.TestCase):
             c.execute("INSERT INTO worlds (id, owner, lease_id, epoch, expires) VALUES (?, ?, ?, ?, ?)", ("w", "a", "lease-a", 1, int(time.time()) + 300))
 
     def attempt(self, operation_id, digest="hash-a", owner="a", lease_id="lease-a", epoch=1, generation=0):
-        params = ("w", operation_id, owner, lease_id, epoch, generation, digest)
+        params = ("w", operation_id, owner, lease_id, epoch, generation, digest, "file-id", 42)
         with lease_model.connection(self.db) as c:
             result = c.execute(COMMIT, params).fetchone()
             if result:
                 return result[0]
-            old = c.execute("SELECT owner, lease_id, epoch, previous_generation, digest, result_generation FROM committed_operations WHERE world_id=? AND operation_id=?", ("w", operation_id)).fetchone()
+            old = c.execute("SELECT owner, lease_id, epoch, previous_generation, digest, object_id, object_size, result_generation FROM committed_operations WHERE world_id=? AND operation_id=?", ("w", operation_id)).fetchone()
             if old is None:
                 return None
-            if old[:5] != (owner, lease_id, epoch, generation, digest):
+            if old[:7] != (owner, lease_id, epoch, generation, digest, "file-id", 42):
                 raise ValueError("operation ID conflict")
-            return old[5]
+            return old[7]
 
     def test_retries_and_conflicting_id(self):
         self.assertEqual(1, self.attempt("op"))

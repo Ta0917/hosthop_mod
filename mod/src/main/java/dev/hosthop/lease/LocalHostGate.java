@@ -172,6 +172,15 @@ public final class LocalHostGate {
         return true;
     }
 
+    public synchronized boolean awaitingRelease(Attempt attempt, PublicationRecord operation) {
+        return attempt != null && attempt == current && phase == Phase.RELEASE_REQUIRED && publication != null && publication.equals(operation);
+    }
+
+    public synchronized boolean awaitingReconciliation(Attempt attempt, PublicationRecord operation) {
+        return attempt != null && attempt == current && phase == Phase.STOP_REQUIRED && publicationUncertain
+                && publication != null && publication.equals(operation);
+    }
+
     public synchronized boolean requireStop(Attempt attempt) {
         if (attempt == null || attempt != current || phase == Phase.IDLE || phase == Phase.RELEASE_REQUIRED) return false;
         phase = Phase.STOP_REQUIRED;

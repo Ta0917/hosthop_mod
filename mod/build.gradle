@@ -281,8 +281,11 @@ tasks.register('snapshotCreateRealWorldProbe', JavaExec) {
     args '--create', file('../test-data/dqm-copy').absolutePath, file('../.tools/snapshot-java-created.zip').absolutePath
 }
 // Optional integration check requires the local Miniflare tools installed under .tools.
+tasks.register('buildLeaseService', Exec) {
+    commandLine 'node', file('../service/build.mjs').absolutePath
+}
 tasks.register('leaseServiceIntegrationProbe', JavaExec) {
-    dependsOn tasks.named('safetyTestClasses')
+    dependsOn tasks.named('safetyTestClasses'), tasks.named('buildLeaseService')
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.lease.LeaseServiceIntegrationProbe'
     systemProperty 'hosthop.bridge', file('../poc/d1/local_https_bridge.mjs').absolutePath

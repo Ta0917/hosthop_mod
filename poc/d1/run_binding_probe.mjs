@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLeaseService } from './lease_service.mjs';
+import { verifyDriveObject } from './drive_verifier.mjs';
 
 if (process.argv.length !== 3) throw new Error('Pass the path to the miniflare package');
 const require = createRequire(import.meta.url);
@@ -20,6 +21,8 @@ const release = load('release.sql');
 const endpointUpdate = load('endpoint_update.sql');
 const endpointStatus = load('endpoint_status.sql');
 const endpointRevision = load('endpoint_revision.sql');
+const snapshotStatus = load('snapshot_status.sql');
+const releaseStatus = load('release_status.sql');
 const mf = new Miniflare(convertV4MiniflareOptions({
   modules: true,
   script: 'export default { fetch() { return new Response("local test"); } }',
@@ -54,14 +57,14 @@ try {
   check(shortRenew.expires === expiry, 'renewal shortened the lease');
 
   const retries = await Promise.all(Array.from({ length: 12 }, () =>
-    db.prepare(commit).bind('world', 'same-operation', winner.owner, winner.lease, epoch, 0, 'digest-a').all()));
+    db.prepare(commit).bind('world', 'same-operation', winner.owner, winner.lease, epoch, 0, 'digest-a', 'object-a', 42).all()));
   check(retries.reduce((count, result) => count + result.results.length, 0) === 1, 'same request changed state more than once');
   const recorded = await db.prepare(commitStatus).bind('world', 'same-operation').first();
-  check(recorded.world_id === 'world' && recorded.operation_id === 'same-operation' && recorded.owner === winner.owner && recorded.lease_id === winner.lease && recorded.epoch === epoch && recorded.previous_generation === 0 && recorded.digest === 'digest-a' && recorded.result_generation === 1, 'retry record differs from original request');
+  check(recorded.world_id === 'world' && recorded.operation_id === 'same-operation' && recorded.owner === winner.owner && recorded.lease_id === winner.lease && recorded.epoch === epoch && recorded.previous_generation === 0 && recorded.digest === 'digest-a' && recorded.object_id === 'object-a' && recorded.object_size === 42 && recorded.result_generation === 1, 'retry record differs from original request');
   check(!(await db.prepare(commitStatus).bind('world', 'missing').first()), 'missing operation had a receipt');
-  check((await db.prepare(commit).bind('world', 'same-operation', winner.owner, winner.lease, epoch, 1, 'different').all()).results.length === 0, 'operation ID reuse changed state');
+  check((await db.prepare(commit).bind('world', 'same-operation', winner.owner, winner.lease, epoch, 1, 'different', 'object-b', 42).all()).results.length === 0, 'operation ID reuse changed state');
   const conflicting = await Promise.all(['digest-b', 'digest-c'].map((digest, i) =>
-    db.prepare(commit).bind('world', `competing-${i}`, winner.owner, winner.lease, epoch, 1, digest).all()));
+    db.prepare(commit).bind('world', `competing-${i}`, winner.owner, winner.lease, epoch, 1, digest, 'object-b', 42).all()));
   check(conflicting.reduce((count, result) => count + result.results.length, 0) === 1, 'competing commits both succeeded or both failed');
   const state = await db.prepare('SELECT generation FROM worlds WHERE id=?1').bind('world').first();
   const count = await db.prepare('SELECT count(*) AS count FROM committed_operations WHERE world_id=?1').bind('world').first();
@@ -69,7 +72,7 @@ try {
 
   await db.prepare("CREATE TRIGGER fail_test BEFORE UPDATE ON worlds BEGIN SELECT RAISE(ABORT, 'injected failure'); END").run();
   let failed = false;
-  try { await db.prepare(commit).bind('world', 'fail-op', winner.owner, winner.lease, epoch, 2, 'digest-d').all(); }
+  try { await db.prepare(commit).bind('world', 'fail-op', winner.owner, winner.lease, epoch, 2, 'digest-d', 'object-d', 42).all(); }
   catch (error) { if (!String(error).includes('injected failure')) throw error; failed = true; }
   check(failed, 'failure injection did not fail');
   const after = await db.prepare('SELECT generation FROM worlds WHERE id=?1').bind('world').first();
@@ -86,7 +89,7 @@ try {
   check(next.epoch === epoch + 1, 'fresh acquisition did not fence prior epoch');
   check((await db.prepare(release).bind('world', winner.owner, winner.lease, epoch, 'same-operation', 1).all()).results.length === 0, 'old owner released newer lease');
   check((await db.prepare(release).bind('world', 'next-owner', 'fresh-lease', next.epoch, 'same-operation', 1).all()).results.length === 0, 'another lease commit allowed release');
-  check((await db.prepare(commit).bind('world', 'final-operation', 'next-owner', 'fresh-lease', next.epoch, 2, 'digest-final').all()).results.length === 1, 'final commit failed');
+  check((await db.prepare(commit).bind('world', 'final-operation', 'next-owner', 'fresh-lease', next.epoch, 2, 'digest-final', 'object-final', 42).all()).results.length === 1, 'final commit failed');
   check((await db.prepare(release).bind('world', 'next-owner', 'fresh-lease', next.epoch, 'final-operation', 2).all()).results.length === 0, 'incorrect final generation released lease');
   await db.prepare("CREATE TRIGGER fail_release BEFORE UPDATE ON worlds BEGIN SELECT RAISE(ABORT, 'release failure'); END").run();
   let releaseFailed = false;
@@ -106,8 +109,10 @@ try {
   const token = 'a'.repeat(43);
   const tokenBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
   const tokenHash = Array.from(new Uint8Array(tokenBytes), b => b.toString(16).padStart(2, '0')).join('');
-  const service = createLeaseService({ acquire, renew, acquireStatus, endpointUpdate, endpointStatus, endpointRevision });
-  const env = { DB: db, MEMBERS: [{ world: 'api-world', owner: 'api-owner', tokenHash }] };
+  let objectVerified = false;
+  const service = createLeaseService({ acquire, renew, acquireStatus, endpointUpdate, endpointStatus, endpointRevision,
+    commit, commitStatus, snapshotStatus, release, releaseStatus }, async () => objectVerified);
+  const env = { DB: db, MEMBERS: [{ world: 'api-world', owner: 'api-owner', tokenHash }], WORLDS: [{ id: 'api-world', folder: 'folder' }] };
   const request = (route, body, credential = token) => service.fetch(new Request(`https://example.invalid/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
   }), env);
@@ -149,7 +154,7 @@ try {
   check(replacement, 'replacement endpoint publication failed');
   check(!(await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, publish.endpoint_revision, null).first()), 'stale callback revoked replacement');
   check(!(await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, revision, 'stale.example').first()), 'stale callback replaced endpoint');
-  check((await db.prepare(commit).bind('api-world', 'api-final', 'api-owner', 'api-lease', grant.epoch, 0, 'digest-final').all()).results.length === 1, 'test final commit failed');
+  check((await db.prepare(commit).bind('api-world', 'api-final', 'api-owner', 'api-lease', grant.epoch, 0, 'digest-final', 'object-final', 42).all()).results.length === 1, 'test final commit failed');
   await db.prepare("UPDATE worlds SET expires=unixepoch('now') WHERE id=?1").bind('api-world').run();
   check(!(await db.prepare(endpointStatus).bind('api-world').first()), 'expired endpoint remained visible');
   check(!(await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, replacement.endpoint_revision, 'stale.example').first()), 'expired owner published endpoint');
@@ -157,6 +162,36 @@ try {
   check((await db.prepare(release).bind('api-world', 'api-owner', 'api-lease', grant.epoch, 'api-final', 1).all()).results.length === 1, 'test release failed');
   await db.prepare(acquire).bind('api-world', 'new-owner', 'new-lease', 120).first();
   check(!(await db.prepare(endpointStatus).bind('api-world').first()), 'old endpoint leaked into new lease');
+  await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('commit-world').run();
+  env.MEMBERS.push({ world: 'commit-world', owner: 'api-owner', tokenHash });
+  env.WORLDS.push({ id: 'commit-world', folder: 'folder' });
+  const commitGrant = await (await request('acquire', { world: 'commit-world', lease: 'commit-lease', duration: 120 })).json();
+  const op = { world: 'commit-world', lease: 'commit-lease', epoch: commitGrant.epoch, operation: 'op',
+    previousGeneration: 0, digest: 'a'.repeat(64), fileId: 'drive-file', size: 42, driveToken: 'temporary-token' };
+  check((await request('commit', op)).status === 422, 'unverified object committed');
+  objectVerified = true;
+  const committed = await request('commit', op);
+  check(committed.status === 200 && (await committed.json()).object_id === 'drive-file', 'verified object failed to commit');
+  check((await request('commit', { ...op, driveToken: undefined })).status === 200, 'commit retry did not recover receipt');
+  check((await request('commit-status', { ...op, fileId: 'other' })).status === 409, 'conflicting commit ID accepted');
+  const snapshot = await request('snapshot-status', { world: 'commit-world' });
+  check(snapshot.status === 200 && (await snapshot.json()).object_id === 'drive-file', 'committed object was not advertised');
+  const releaseBody = { world: 'commit-world', lease: 'commit-lease', epoch: commitGrant.epoch, operation: 'op', resultGeneration: 1 };
+  check((await request('release', { ...releaseBody, operation: 'wrong' })).status === 409, 'wrong final commit released lease');
+  check((await request('release', releaseBody)).status === 200, 'verified final release failed');
+  check((await request('release-status', releaseBody)).status === 200, 'release receipt unavailable');
+  const originalFetch = globalThis.fetch;
+  try {
+    const expected = { folder: 'folder', fileId: 'drive-file', digest: 'a'.repeat(64), size: 42, accessToken: 'temporary-token' };
+    globalThis.fetch = async (url, options) => {
+      check(url.startsWith('https://www.googleapis.com/drive/v3/files/drive-file?'), 'Drive verification used wrong host');
+      check(options.redirect === 'manual' && options.headers.Authorization === 'Bearer temporary-token', 'Drive request was not scoped');
+      return Response.json({ id: 'drive-file', name: `${expected.digest}.zip`, size: '42', sha256Checksum: expected.digest, parents: ['folder'], trashed: false });
+    };
+    check(await verifyDriveObject(expected), 'valid Drive metadata rejected');
+    check(!await verifyDriveObject({ ...expected, digest: 'b'.repeat(64) }), 'incorrect Drive digest accepted');
+    check(!await verifyDriveObject({ ...expected, folder: 'other' }), 'incorrect Drive folder accepted');
+  } finally { globalThis.fetch = originalFetch; }
   console.log('PASS: Miniflare D1 bindings: leases, retries, renewals, commits, releases, concurrency, rollback');
 } finally {
   await mf.dispose();

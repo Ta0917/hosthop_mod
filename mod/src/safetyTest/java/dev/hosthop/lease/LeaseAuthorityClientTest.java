@@ -13,7 +13,7 @@ public final class LeaseAuthorityClientTest {
                 "{\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         var client = new LeaseAuthorityClient(URI.create("https://authority.example/"), "a".repeat(43),
                 request -> {
-                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status").contains(request.uri().getPath()));
+                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status", "/commit", "/commit-status", "/snapshot-status", "/release", "/release-status").contains(request.uri().getPath()));
                     check(request.headers().firstValue("Authorization").orElseThrow().equals("Bearer " + "a".repeat(43)));
                     return reply.get();
                 }, nanos::get, millis::get);
@@ -32,6 +32,18 @@ public final class LeaseAuthorityClientTest {
         check(endpoint.epoch() == 4 && endpoint.revision() == 7 && endpoint.address().equals("example.e4mc.link"));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"endpoint\":\"example.evil.invalid\",\"endpoint_revision\":7,\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         expectFailure(() -> client.endpoint("world", 2));
+        String digest = "a".repeat(64);
+        var publication = new PublicationRecord("world", "op", "owner", "lease", 4, 3, digest, "file-id", 42, 4);
+        String receipt = "{\"world_id\":\"world\",\"operation_id\":\"op\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"previous_generation\":3,\"digest\":\"" + digest + "\",\"object_id\":\"file-id\",\"object_size\":42,\"result_generation\":4}";
+        reply.set(new LeaseAuthorityClient.Reply(200, receipt));
+        check(client.commit(publication, "drive-token").equals(publication));
+        check(client.commitStatus(publication).equals(publication));
+        reply.set(new LeaseAuthorityClient.Reply(200, receipt.replace("file-id", "wrong-file")));
+        expectFailure(() -> client.commitStatus(publication));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"generation\":4,\"digest\":\"" + digest + "\",\"object_id\":\"file-id\",\"object_size\":42}"));
+        check(client.snapshot("world").object().fileId().equals("file-id"));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"world_id\":\"world\",\"operation_id\":\"op\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"result_generation\":4}"));
+        check(client.release(publication).matches(publication) && client.releaseStatus(publication).matches(publication));
         reply.set(new LeaseAuthorityClient.Reply(409, "{}"));
         expectFailure(() -> client.acquire("world", "lease", 30, 2));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"epoch\":5,\"generation\":3,\"server_now\":100,\"expires\":130}"));

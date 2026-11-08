@@ -2,6 +2,8 @@ package dev.hosthop.lease;
 
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
+import com.google.gson.JsonObject;
+import dev.hosthop.storage.GoogleDriveSnapshotStore;
 import java.io.IOException;
 import java.io.ByteArrayOutputStream;
 import java.io.StringReader;
@@ -38,6 +40,7 @@ public final class LeaseAuthorityClient {
     public record Grant(long epoch, long generation, ConservativeLeaseDeadline deadline) {}
     public record Endpoint(String world, long epoch, long generation, long revision, String address,
                            ConservativeLeaseDeadline deadline) {}
+    public record Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object) {}
     @FunctionalInterface public interface Exchange { Reply send(HttpRequest request) throws IOException, InterruptedException; }
 
     public LeaseAuthorityClient(URI base, String token) {
@@ -90,7 +93,7 @@ public final class LeaseAuthorityClient {
         long revision = required(fields.numbers(), "endpoint_revision");
         long serverNow = required(fields.numbers(), "server_now");
         long expires = required(fields.numbers(), "expires");
-        String address = fields.endpoint();
+        String address = fields.strings().get("endpoint");
         if (epoch < 1 || generation < 0 || revision < 0 || serverNow < 0 || address == null
                 || !address.matches("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.e4mc\\.link"))
             throw new IOException("Invalid endpoint response");
@@ -101,6 +104,85 @@ public final class LeaseAuthorityClient {
         } catch (IllegalArgumentException | ArithmeticException invalid) {
             throw new IOException("Invalid endpoint response", invalid);
         }
+    }
+
+    public Snapshot snapshot(String world) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID)) throw new IllegalArgumentException("Invalid world");
+        var body = new JsonObject(); body.addProperty("world", world);
+        var fields = post("snapshot-status", body);
+        long generation = required(fields.numbers(), "generation");
+        long size = required(fields.numbers(), "object_size");
+        String digest = fields.strings().get("digest"), objectId = fields.strings().get("object_id");
+        if (generation < 1 || size < 1 || size > 68_719_476_736L || digest == null || !digest.matches("[0-9a-f]{64}")
+                || objectId == null || !objectId.matches("[A-Za-z0-9_-]{1,200}")) throw new IOException("Invalid snapshot reference");
+        return new Snapshot(generation, new GoogleDriveSnapshotStore.ObjectRef(objectId, digest, size));
+    }
+
+    /** Publish only after the server is stopped and the uploaded object has been verified. */
+    public PublicationRecord commit(PublicationRecord operation, String driveToken) throws IOException, InterruptedException {
+        if (driveToken == null || driveToken.isBlank() || driveToken.length() > 2048 || driveToken.chars().anyMatch(Character::isISOControl))
+            throw new IllegalArgumentException("Invalid Drive token");
+        var body = publicationBody(operation);
+        body.addProperty("driveToken", driveToken);
+        return matchPublication(operation, post("commit", body));
+    }
+
+    public PublicationRecord commitStatus(PublicationRecord operation) throws IOException, InterruptedException {
+        return matchPublication(operation, post("commit-status", publicationBody(operation)));
+    }
+
+    public ReleaseRecord release(PublicationRecord operation) throws IOException, InterruptedException {
+        return releaseRequest("release", operation);
+    }
+
+    public ReleaseRecord releaseStatus(PublicationRecord operation) throws IOException, InterruptedException {
+        return releaseRequest("release-status", operation);
+    }
+
+    private ReleaseRecord releaseRequest(String route, PublicationRecord operation) throws IOException, InterruptedException {
+        var body = publicationBody(operation);
+        body.addProperty("resultGeneration", operation.resultGeneration());
+        var fields = post(route, body);
+        var strings = fields.strings();
+        var receipt = new ReleaseRecord(strings.get("world_id"), strings.get("owner"), strings.get("lease_id"),
+                required(fields.numbers(), "epoch"), strings.get("operation_id"), required(fields.numbers(), "result_generation"));
+        if (!receipt.matches(operation)) throw new IOException("Release receipt mismatch");
+        return receipt;
+    }
+
+    private static JsonObject publicationBody(PublicationRecord operation) {
+        if (operation == null || !operation.worldId().matches(ID) || !operation.leaseId().matches(ID)
+                || !operation.owner().matches(ID) || !operation.operationId().matches(ID) || !operation.digest().matches("[0-9a-f]{64}"))
+            throw new IllegalArgumentException("Invalid publication");
+        var body = new JsonObject();
+        body.addProperty("world", operation.worldId()); body.addProperty("lease", operation.leaseId());
+        body.addProperty("epoch", operation.epoch()); body.addProperty("operation", operation.operationId());
+        body.addProperty("previousGeneration", operation.previousGeneration()); body.addProperty("digest", operation.digest());
+        body.addProperty("fileId", operation.objectId()); body.addProperty("size", operation.objectSize());
+        return body;
+    }
+
+    private static PublicationRecord matchPublication(PublicationRecord operation, Fields fields) throws IOException {
+        var strings = fields.strings(); var numbers = fields.numbers();
+        if (!operation.worldId().equals(strings.get("world_id")) || !operation.owner().equals(strings.get("owner"))
+                || !operation.leaseId().equals(strings.get("lease_id")) || !operation.operationId().equals(strings.get("operation_id"))
+                || !operation.digest().equals(strings.get("digest")) || !operation.objectId().equals(strings.get("object_id"))
+                || operation.epoch() != required(numbers, "epoch") || operation.previousGeneration() != required(numbers, "previous_generation")
+                || operation.objectSize() != required(numbers, "object_size") || operation.resultGeneration() != required(numbers, "result_generation"))
+            throw new IOException("Publication receipt mismatch");
+        return operation;
+    }
+
+    private Fields post(String route, JsonObject body) throws IOException, InterruptedException {
+        String text = body.toString();
+        if (text.getBytes(StandardCharsets.UTF_8).length > 4096) throw new IOException("Authority request too large");
+        var request = HttpRequest.newBuilder(base.resolve("/" + route)).timeout(Duration.ofSeconds(10))
+                .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(text, StandardCharsets.UTF_8)).build();
+        Reply reply = exchange.send(request);
+        if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES)
+            throw new IOException("Authority request failed");
+        return parseFields(reply.body());
     }
 
     private Grant request(String route, String world, String lease, int duration, long expectedEpoch, String expectedOwner, long margin) throws IOException, InterruptedException {
@@ -121,7 +203,7 @@ public final class LeaseAuthorityClient {
         long generation = required(fields.numbers(), expectedOwner == null ? "generation" : "base_generation");
         long serverNow = required(fields.numbers(), "server_now");
         long expires = required(fields.numbers(), "expires");
-        if (expectedOwner != null && (!expectedOwner.equals(fields.owner())
+        if (expectedOwner != null && (!expectedOwner.equals(fields.strings().get("owner"))
                 || required(fields.numbers(), "duration_seconds") != duration || required(fields.numbers(), "active") != 1))
             throw new IOException("Acquisition does not match active request");
         if (epoch < 1 || generation < 0 || serverNow < 0 || (expectedEpoch != 0 && epoch != expectedEpoch)) throw new IOException("Invalid lease grant");
@@ -140,13 +222,12 @@ public final class LeaseAuthorityClient {
         return value;
     }
 
-    private record Fields(Map<String, Long> numbers, String owner, String endpoint) {}
+    private record Fields(Map<String, Long> numbers, Map<String, String> strings) {}
 
     private static Fields parseFields(String text) throws IOException {
         var values = new HashMap<String, Long>();
         var names = new HashSet<String>();
-        String owner = null;
-        String endpoint = null;
+        var strings = new HashMap<String, String>();
         try (var reader = new JsonReader(new StringReader(text))) {
             reader.setLenient(false);
             reader.beginObject();
@@ -155,22 +236,20 @@ public final class LeaseAuthorityClient {
                 if (!names.add(name)) throw new IOException("Duplicate response field");
                 if (name.equals("epoch") || name.equals("generation") || name.equals("base_generation")
                         || name.equals("duration_seconds") || name.equals("active") || name.equals("endpoint_revision")
+                        || name.equals("previous_generation") || name.equals("result_generation") || name.equals("object_size")
                         || name.equals("server_now") || name.equals("expires")) {
                     if (reader.peek() != JsonToken.NUMBER) throw new IOException("Invalid response field");
                     String value = reader.nextString();
                     if (!value.matches("-?(0|[1-9][0-9]*)")) throw new IOException("Invalid response number");
                     values.put(name, Long.parseLong(value));
-                } else if (name.equals("owner")) {
-                    if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid response owner");
-                    owner = reader.nextString();
-                } else if (name.equals("endpoint")) {
-                    if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid response endpoint");
-                    endpoint = reader.nextString();
+                } else if (java.util.Set.of("owner", "endpoint", "world_id", "operation_id", "lease_id", "digest", "object_id").contains(name)) {
+                    if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid response text");
+                    strings.put(name, reader.nextString());
                 } else reader.skipValue();
             }
             reader.endObject();
             if (reader.peek() != JsonToken.END_DOCUMENT) throw new IOException("Trailing response data");
-            return new Fields(values, owner, endpoint);
+            return new Fields(values, strings);
         } catch (IllegalStateException | NumberFormatException invalid) {
             throw new IOException("Invalid lease response", invalid);
         }

@@ -20,7 +20,7 @@ import java.util.Arrays;
  * Directory durability, access control and integration are caller concerns.
  */
 public final class PendingPublicationJournal {
-    private static final int MAGIC = 0x48485031;
+    private static final int MAGIC = 0x48485032;
     private static final long MAX_BYTES = 32_768;
 
     private PendingPublicationJournal() {}
@@ -37,6 +37,8 @@ public final class PendingPublicationJournal {
             out.writeLong(record.epoch());
             out.writeLong(record.previousGeneration());
             out.writeUTF(record.digest());
+            out.writeUTF(record.objectId());
+            out.writeLong(record.objectSize());
             out.writeLong(record.resultGeneration());
         }
         byte[] payload = bytes.toByteArray();
@@ -65,7 +67,7 @@ public final class PendingPublicationJournal {
         try (var in = new DataInputStream(new ByteArrayInputStream(payload))) {
             if (in.readInt() != MAGIC) throw new IOException("Unknown publication journal version");
             var record = new PublicationRecord(in.readUTF(), in.readUTF(), in.readUTF(), in.readUTF(),
-                    in.readLong(), in.readLong(), in.readUTF(), in.readLong());
+                    in.readLong(), in.readLong(), in.readUTF(), in.readUTF(), in.readLong(), in.readLong());
             if (in.read() != -1) throw new IOException("Trailing publication journal data");
             return record;
         } catch (IllegalArgumentException invalid) {
