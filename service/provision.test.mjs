@@ -30,5 +30,20 @@ test('generates distinct invitations matching Worker credentials and refuses ove
     }
     assert.notEqual(run().status, 0);
     assert.equal(await readFile(join(output, 'invite-one.txt'), 'utf8'), codes[0]);
+    const addOutput = join(dir, 'added');
+    const add = name => spawnSync(process.execPath, [resolve('service/add-member.mjs'), input,
+      join(output, 'members-secrets.json'), name, addOutput], { encoding: 'utf8' });
+    assert.notEqual(add('ONE').status, 0);
+    const added = add('three');
+    assert.equal(added.status, 0);
+    const updated = JSON.parse(await readFile(join(addOutput, 'members-secrets.json'), 'utf8'));
+    assert.deepEqual(updated.slice(0, 2), members);
+    const thirdCode = await readFile(join(addOutput, 'invite-three.txt'), 'utf8');
+    const third = JSON.parse(Buffer.from(thirdCode.trim().slice('hosthop1:'.length), 'base64url'));
+    assert.equal(third.principal, 'three');
+    assert.equal(createHash('sha256').update(third.member_token).digest('hex'), updated[2].tokenHash);
+    assert.ok(!added.stdout.includes(third.member_token));
+    assert.notEqual(add('four').status, 0);
+    assert.deepEqual(JSON.parse(await readFile(join(output, 'members-secrets.json'), 'utf8')), members);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
