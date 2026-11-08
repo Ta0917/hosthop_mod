@@ -214,7 +214,17 @@ tasks.register('safetyCheck', JavaExec) {
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.relay.SessionAddressRegistryTest'
 }
-tasks.named('check') { dependsOn tasks.named('safetyCheck') }
+tasks.register('leaseSafetyCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.lease.ConservativeLeaseDeadlineTest'
+}
+tasks.register('hostGateSafetyCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.lease.LocalHostGateTest'
+}
+tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck') }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {
