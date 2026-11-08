@@ -9,7 +9,9 @@ import java.io.FilterInputStream;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
@@ -18,8 +20,8 @@ import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipFile;
 
 /** Verifies offline backup format 1. It does not make a live-world snapshot. */
 public final class SnapshotVerifier {
@@ -31,18 +33,65 @@ public final class SnapshotVerifier {
 
     private SnapshotVerifier() {}
     private record Metadata(long size, String sha256) {}
+    private record Verified(Map<String, Metadata> files, Map<String, ZipArchiveEntry> entries, Result result) {}
     public record Result(int files, long uncompressedBytes) {}
 
     /** Verification does not prevent subsequent archive modification; caller must protect the file. */
     public static Result verify(Path path) throws IOException {
         if (Files.size(path) > MAX_TOTAL) throw new IOException("Archive too large");
-        try (var archive = new ZipFile(path.toFile(), StandardCharsets.UTF_8)) {
-            if (archive.size() > MAX_FILES + 1) throw new IOException("Too many archive entries");
+        try (var archive = ZipFile.builder().setPath(path).get()) {
+            return verifyArchive(archive).result();
+        }
+    }
+
+    /** Restores only to a new directory. Partial output is retained on failure. */
+    public static Result restore(Path path, Path destination) throws IOException {
+        if (Files.size(path) > MAX_TOTAL) throw new IOException("Archive too large");
+        Path root = destination.toAbsolutePath().normalize();
+        try (var archive = ZipFile.builder().setPath(path).get()) {
+            var verified = verifyArchive(archive);
+            Files.createDirectory(root);
+            byte[] buffer = new byte[1024 * 1024];
+            for (var item : verified.files().entrySet()) {
+                var parts = item.getKey().split("/");
+                Path parent = root;
+                for (int i = 0; i < parts.length - 1; i++) {
+                    parent = parent.resolve(parts[i]);
+                    try { Files.createDirectory(parent); }
+                    catch (java.nio.file.FileAlreadyExistsException exists) {
+                        if (!Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Invalid restore directory", exists);
+                    }
+                }
+                Path output = parent.resolve(parts[parts.length - 1]);
+                var digest = sha256();
+                long count = 0;
+                try (var input = archive.getInputStream(verified.entries().get("world/" + item.getKey()));
+                     var target = Files.newOutputStream(output, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+                    int read;
+                    while ((read = input.read(buffer)) != -1) {
+                        count += read;
+                        if (count > item.getValue().size()) throw new IOException("Archive entry exceeds declared size");
+                        digest.update(buffer, 0, read);
+                        target.write(buffer, 0, read);
+                    }
+                }
+                if (count != item.getValue().size() || !HexFormat.of().formatHex(digest.digest()).equals(item.getValue().sha256()))
+                    throw new IOException("Restored content mismatch");
+            }
+            return verified.result();
+        }
+    }
+
+    private static Verified verifyArchive(ZipFile archive) throws IOException {
             var names = new HashSet<String>();
-            var entries = new HashMap<String, ZipEntry>();
-            var enumeration = archive.entries();
+            var entries = new HashMap<String, ZipArchiveEntry>();
+            var enumeration = archive.getEntries();
             while (enumeration.hasMoreElements()) {
                 var entry = enumeration.nextElement();
+                int type = entry.getUnixMode() & 0170000;
+                if (entry.isUnixSymlink() || (type != 0 && type != 0100000) || !archive.canReadEntryData(entry))
+                    throw new IOException("Unsupported archive entry type");
+                if (entries.size() >= MAX_FILES + 1) throw new IOException("Too many archive entries");
                 if (!names.add(entry.getName())) throw new IOException("Duplicate archive entry");
                 entries.put(entry.getName(), entry);
             }
@@ -73,8 +122,7 @@ public final class SnapshotVerifier {
                 if (count != metadata.size() || !HexFormat.of().formatHex(digest.digest()).equals(metadata.sha256()))
                     throw new IOException("Archive content mismatch");
             }
-            return new Result(files.size(), total);
-        }
+            return new Verified(files, entries, new Result(files.size(), total));
     }
 
     private static Map<String, Metadata> readManifest(InputStream input) throws IOException {
