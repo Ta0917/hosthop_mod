@@ -5,6 +5,8 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.util.concurrent.TimeUnit;
 
 /** Opt-in experiment: creates an empty, temporary public e4mc tunnel. */
@@ -33,6 +35,12 @@ public final class E4mcRelayProbe {
         System.out.println("HOSTHOP_PROBE assignment captured=" + (CapturedEndpoint.address != null));
         if (!state.equals("STARTED") || CapturedEndpoint.address == null) {
             throw new IllegalStateException("Relay or assignment capture failed");
+        }
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(CapturedEndpoint.address, 25565), 5000);
+            System.out.println("HOSTHOP_PROBE relay TCP accepted=true");
+        } catch (java.io.IOException e) {
+            System.out.println("HOSTHOP_PROBE relay TCP accepted=false, error=" + e.getClass().getSimpleName());
         }
         Object session = client.getField("session").get(null);
         session.getClass().getMethod("stop").invoke(session);
