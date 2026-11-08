@@ -70,16 +70,44 @@ public final class E4mcRelayProbe {
                 System.out.println("HOSTHOP_PROBE monitoring interval ended");
             }
             if (Boolean.getBoolean("hosthop.e4mcDropProbe")) {
-                var channelField = session.getClass().getDeclaredField("quicChannel");
-                if (!channelField.trySetAccessible()) throw new IllegalStateException("Cannot inspect relay channel");
-                Object channel = channelField.get(session);
-                if (!(channel instanceof io.netty.channel.Channel relay)) throw new IllegalStateException("Relay channel unavailable");
-                relay.close().syncUninterruptibly();
-                long dropDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                while (CapturedEndpoint.address != null && System.nanoTime() < dropDeadline) Thread.sleep(50);
-                boolean cleared = CapturedEndpoint.address == null;
-                System.out.println("HOSTHOP_PROBE assignment absent after forced channel close=" + cleared);
-                if (!cleared) throw new IllegalStateException("Stale assignment after channel close");
+                String guestHost = CapturedEndpoint.address;
+                splitPing(guestHost, 25565, protocol);
+                System.out.println("HOSTHOP_PROBE split handshake control verified=true");
+                byte[] handshake = statusHandshake(guestHost, 25565, protocol);
+                try (Socket guest = new Socket()) {
+                    guest.connect(new InetSocketAddress(guestHost, 25565), 5000);
+                    guest.setSoTimeout(500);
+                    guest.getOutputStream().write(handshake, 0, 1); // Send only the first byte of the frame.
+                    guest.getOutputStream().flush();
+                    try {
+                        guest.getInputStream().read();
+                        throw new IOException("Guest connection closed before the relay test");
+                    } catch (SocketTimeoutException expected) {
+                        System.out.println("HOSTHOP_PROBE guest stream initially open=true");
+                    }
+                    var channelField = session.getClass().getDeclaredField("quicChannel");
+                    if (!channelField.trySetAccessible()) throw new IllegalStateException("Cannot inspect relay channel");
+                    Object channel = channelField.get(session);
+                    if (!(channel instanceof io.netty.channel.Channel relay)) throw new IllegalStateException("Relay channel unavailable");
+                    relay.close().syncUninterruptibly();
+                    long dropDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                    while (CapturedEndpoint.address != null && System.nanoTime() < dropDeadline) Thread.sleep(50);
+                    boolean cleared = CapturedEndpoint.address == null;
+                    System.out.println("HOSTHOP_PROBE assignment absent after forced channel close=" + cleared);
+                    if (!cleared) throw new IllegalStateException("Stale assignment after channel close");
+                    boolean statusAfterClose;
+                    guest.setSoTimeout(8000);
+                    try {
+                        guest.getOutputStream().write(handshake, 1, handshake.length - 1);
+                        guest.getOutputStream().write(new byte[]{1, 0});
+                        guest.getOutputStream().flush();
+                        readStatus(guest, protocol);
+                        statusAfterClose = true;
+                    } catch (IOException failed) {
+                        statusAfterClose = false;
+                    }
+                    System.out.println("HOSTHOP_PROBE guest status response after relay close=" + statusAfterClose);
+                }
             }
         } catch (Throwable e) {
             failure = e;
@@ -117,33 +145,64 @@ public final class E4mcRelayProbe {
             socket.connect(new InetSocketAddress(host, port), 5000);
             socket.setSoTimeout(8000);
             DataOutputStream out = new DataOutputStream(socket.getOutputStream());
-            ByteArrayOutputStream body = new ByteArrayOutputStream();
-            DataOutputStream handshake = new DataOutputStream(body);
-            writeVarInt(handshake, 0);
-            writeVarInt(handshake, protocol);
-            byte[] address = host.getBytes(StandardCharsets.UTF_8);
-            writeVarInt(handshake, address.length);
-            handshake.write(address);
-            handshake.writeShort(port);
-            writeVarInt(handshake, 1);
-            writeVarInt(out, body.size());
-            body.writeTo(out);
+            out.write(statusHandshake(host, port, protocol));
             out.writeByte(1);
             out.writeByte(0);
             out.flush();
-            DataInputStream in = new DataInputStream(socket.getInputStream());
-            int length = readVarInt(in);
-            if (length <= 0 || length > 1_000_000) throw new IOException("Invalid response length");
-            byte[] frame = in.readNBytes(length);
-            if (frame.length != length) throw new IOException("Incomplete response");
-            DataInputStream response = new DataInputStream(new ByteArrayInputStream(frame));
-            if (readVarInt(response) != 0) throw new IOException("Unexpected status packet");
-            int jsonLength = readVarInt(response);
-            if (jsonLength < 0 || jsonLength != response.available()) throw new IOException("Invalid status JSON length");
-            String json = new String(response.readNBytes(jsonLength), StandardCharsets.UTF_8);
-            var version = JsonParser.parseString(json).getAsJsonObject().getAsJsonObject("version");
-            if (version == null || version.get("protocol").getAsInt() != protocol) throw new IOException("Unexpected protocol version");
+            readStatus(socket, protocol);
         }
+    }
+
+    private static byte[] statusHandshake(String host, int port, int protocol) throws IOException {
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        DataOutputStream handshake = new DataOutputStream(body);
+        writeVarInt(handshake, 0);
+        writeVarInt(handshake, protocol);
+        byte[] address = host.getBytes(StandardCharsets.UTF_8);
+        writeVarInt(handshake, address.length);
+        handshake.write(address);
+        handshake.writeShort(port);
+        writeVarInt(handshake, 1);
+        ByteArrayOutputStream frame = new ByteArrayOutputStream();
+        writeVarInt(new DataOutputStream(frame), body.size());
+        body.writeTo(frame);
+        return frame.toByteArray();
+    }
+
+    private static void splitPing(String host, int port, int protocol) throws IOException {
+        byte[] handshake = statusHandshake(host, port, protocol);
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 5000);
+            socket.setSoTimeout(500);
+            socket.getOutputStream().write(handshake, 0, 1);
+            socket.getOutputStream().flush();
+            try {
+                socket.getInputStream().read();
+                throw new IOException("Guest connection closed before split handshake");
+            } catch (SocketTimeoutException expected) {
+                // A quiet but open stream is expected while the frame is incomplete.
+            }
+            socket.setSoTimeout(8000);
+            socket.getOutputStream().write(handshake, 1, handshake.length - 1);
+            socket.getOutputStream().write(new byte[]{1, 0});
+            socket.getOutputStream().flush();
+            readStatus(socket, protocol);
+        }
+    }
+
+    private static void readStatus(Socket socket, int protocol) throws IOException {
+        DataInputStream in = new DataInputStream(socket.getInputStream());
+        int length = readVarInt(in);
+        if (length <= 0 || length > 1_000_000) throw new IOException("Invalid response length");
+        byte[] frame = in.readNBytes(length);
+        if (frame.length != length) throw new IOException("Incomplete response");
+        DataInputStream response = new DataInputStream(new ByteArrayInputStream(frame));
+        if (readVarInt(response) != 0) throw new IOException("Unexpected status packet");
+        int jsonLength = readVarInt(response);
+        if (jsonLength < 0 || jsonLength != response.available()) throw new IOException("Invalid status JSON length");
+        String json = new String(response.readNBytes(jsonLength), StandardCharsets.UTF_8);
+        var version = JsonParser.parseString(json).getAsJsonObject().getAsJsonObject("version");
+        if (version == null || version.get("protocol").getAsInt() != protocol) throw new IOException("Unexpected protocol version");
     }
 
     private static void writeVarInt(DataOutputStream out, int value) throws IOException {
