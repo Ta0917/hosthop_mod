@@ -36,6 +36,7 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
     private static final int MAX_REPLY = 64 * 1024;
     private static final long MAX_SIZE = 64L * 1024 * 1024 * 1024;
     private static final URI INITIATE = URI.create("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,size,sha256Checksum,parents,trashed");
+    private static final URI QUOTA = URI.create("https://www.googleapis.com/drive/v3/about?fields=storageQuota%28limit%2Cusage%29%2CmaxUploadSize");
     public record ObjectRef(String fileId, String sha256, long size) {}
     record Reply(int status, HttpHeaders headers, byte[] body) {}
     @FunctionalInterface interface Transport { Reply send(HttpRequest request) throws IOException, InterruptedException; }
@@ -51,6 +52,38 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
     GoogleDriveSnapshotStore(Transport transport) { this(transport, null); }
     GoogleDriveSnapshotStore(Transport transport, Downloader downloader) { this.transport = transport; this.downloader = downloader; }
 
+    public static final class QuotaExceeded extends IOException {
+        private QuotaExceeded() { super("Google Drive storage is insufficient"); }
+    }
+
+    /** A snapshot of the uploading account's quota, which can change at any time. */
+    @Override public void checkUploadCapacity(long bytes, String accessToken) throws IOException, InterruptedException {
+        if (bytes < 1 || bytes > MAX_SIZE || accessToken == null || accessToken.isBlank()
+                || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
+            throw new IllegalArgumentException("Invalid Drive quota check");
+        var request = HttpRequest.newBuilder(QUOTA).timeout(Duration.ofSeconds(15))
+                .header("Authorization", "Bearer " + accessToken).GET().build();
+        var response = transport.send(request);
+        if (response == null || response.status() != 200 || response.body() == null || response.body().length > MAX_REPLY)
+            throw new IOException("Drive quota could not be checked");
+        try {
+            var json = JsonParser.parseString(new String(response.body(), StandardCharsets.UTF_8)).getAsJsonObject();
+            var quota = json.getAsJsonObject("storageQuota");
+            if (quota == null) throw new IOException("Drive quota unavailable");
+            if (json.has("maxUploadSize") && bytes > quotaNumber(json.get("maxUploadSize").getAsString())) throw new QuotaExceeded();
+            if (quota.has("limit")) {
+                long limit = quotaNumber(quota.get("limit").getAsString());
+                long usage = quotaNumber(quota.get("usage").getAsString());
+                if (usage >= limit || bytes > limit - usage) throw new QuotaExceeded();
+            }
+        } catch (RuntimeException invalid) { throw new IOException("Invalid Drive quota response", invalid); }
+    }
+
+    private static long quotaNumber(String value) {
+        if (value == null || !value.matches("0|[1-9][0-9]*")) throw new IllegalArgumentException("Invalid quota value");
+        return Long.parseLong(value);
+    }
+
     /** Creates a new Drive file; never updates an existing object. Runs off the game thread. */
     public ObjectRef upload(Path archive, String folderId, String accessToken) throws IOException, InterruptedException {
         if (folderId == null || !folderId.matches("[A-Za-z0-9_-]{1,200}") || accessToken == null
@@ -60,6 +93,7 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         SnapshotVerifier.verify(archive);
         long size = Files.size(archive);
         if (size <= 0 || size > MAX_SIZE) throw new IOException("Invalid snapshot size");
+        checkUploadCapacity(size, accessToken);
         String expectedHash = hashFile(archive);
         String name = expectedHash + ".zip";
         var metadata = new JsonObject();

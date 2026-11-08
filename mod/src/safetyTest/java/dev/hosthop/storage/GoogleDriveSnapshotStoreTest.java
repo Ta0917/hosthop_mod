@@ -29,16 +29,27 @@ public final class GoogleDriveSnapshotStoreTest {
             var store = new GoogleDriveSnapshotStore(request -> {
                 int index = calls.getAndIncrement();
                 check(request.headers().firstValue("Authorization").orElseThrow().equals("Bearer test-token"));
-                if (index == 0) return reply(200, Map.of("Location", List.of("https://www.googleapis.com/upload/drive/v3/files?upload_id=test")), "");
-                if (index == 1) {
+                if (index == 0) return reply(200, Map.of(), "{\"storageQuota\":{\"limit\":\"1000000000\",\"usage\":\"10\"}}");
+                if (index == 1) return reply(200, Map.of("Location", List.of("https://www.googleapis.com/upload/drive/v3/files?upload_id=test")), "");
+                if (index == 2) {
                     check(request.headers().firstValue("Content-Range").orElseThrow().equals("bytes 0-8388607/" + size));
                     return reply(308, Map.of("Range", List.of("bytes=0-8388607")), "");
                 }
-                check(index == 2 && request.headers().firstValue("Content-Range").orElseThrow().equals("bytes 8388608-" + (size - 1) + "/" + size));
+                check(index == 3 && request.headers().firstValue("Content-Range").orElseThrow().equals("bytes 8388608-" + (size - 1) + "/" + size));
                 return reply(200, Map.of(), "{\"id\":\"file-id\",\"name\":\"" + hash + ".zip\",\"size\":\"" + size + "\",\"sha256Checksum\":\"" + hash + "\",\"parents\":[\"folder\"],\"trashed\":false}");
             });
             var uploaded = store.upload(archive, "folder", "test-token");
-            check(calls.get() == 3 && uploaded.fileId().equals("file-id") && uploaded.sha256().equals(hash) && uploaded.size() == size);
+            check(calls.get() == 4 && uploaded.fileId().equals("file-id") && uploaded.sha256().equals(hash) && uploaded.size() == size);
+            var blockedCalls = new AtomicInteger();
+            var full = new GoogleDriveSnapshotStore(request -> {
+                blockedCalls.incrementAndGet();
+                return reply(200, Map.of(), "{\"storageQuota\":{\"limit\":\"100\",\"usage\":\"99\"}}");
+            });
+            try { full.upload(archive, "folder", "test-token"); throw new AssertionError("Insufficient quota accepted"); }
+            catch (GoogleDriveSnapshotStore.QuotaExceeded expected) { }
+            check(blockedCalls.get() == 1);
+            var unlimited = new GoogleDriveSnapshotStore(request -> reply(200, Map.of(), "{\"storageQuota\":{}}"));
+            unlimited.checkUploadCapacity(size, "test-token");
             var downloader = new GoogleDriveSnapshotStore(request -> { throw new AssertionError(); }, (request, output, expectedSize, expectedHash) -> {
                 check(request.uri().toString().equals("https://www.googleapis.com/drive/v3/files/file-id?alt=media"));
                 var bytes = java.nio.ByteBuffer.wrap(Files.readAllBytes(archive));
@@ -53,14 +64,17 @@ public final class GoogleDriveSnapshotStoreTest {
             });
             try { corruptDownloader.download(uploaded, badDownload, "test-token"); throw new AssertionError("corrupt download accepted"); }
             catch (IOException expected) { }
-            var hostile = new GoogleDriveSnapshotStore(request -> reply(200, Map.of("Location", List.of("https://attacker.invalid/upload/drive/v3/files?upload_id=test")), ""));
+            var hostile = new GoogleDriveSnapshotStore(request -> request.uri().getPath().endsWith("/about")
+                    ? reply(200, Map.of(), "{\"storageQuota\":{}}")
+                    : reply(200, Map.of("Location", List.of("https://attacker.invalid/upload/drive/v3/files?upload_id=test")), ""));
             try { hostile.upload(archive, "folder", "test-token"); throw new AssertionError("untrusted session accepted"); }
             catch (IOException expected) { }
             var invalidHash = new GoogleDriveSnapshotStore(new GoogleDriveSnapshotStore.Transport() {
                 int step;
                 @Override public GoogleDriveSnapshotStore.Reply send(java.net.http.HttpRequest request) {
-                    if (step++ == 0) return reply(200, Map.of("Location", List.of("https://www.googleapis.com/upload/drive/v3/files?upload_id=test")), "");
-                    if (step == 2) return reply(308, Map.of("Range", List.of("bytes=0-8388607")), "");
+                    if (step++ == 0) return reply(200, Map.of(), "{\"storageQuota\":{}}");
+                    if (step == 2) return reply(200, Map.of("Location", List.of("https://www.googleapis.com/upload/drive/v3/files?upload_id=test")), "");
+                    if (step == 3) return reply(308, Map.of("Range", List.of("bytes=0-8388607")), "");
                     return reply(200, Map.of(), "{\"id\":\"file-id\",\"name\":\"" + hash + ".zip\",\"size\":\"" + size + "\",\"sha256Checksum\":\"wrong\",\"parents\":[\"folder\"]}");
                 }
             });

@@ -41,6 +41,7 @@ public final class SharedWorldTransfer {
             if (snapshot.generation() != acquisition.generation()) throw new IOException("Snapshot generation changed");
             storage.download(snapshot.object(), archive, driveToken);
         }
+        storage.checkUploadCapacity(Files.size(archive), driveToken);
         SnapshotVerifier.restore(archive, destination);
         if (!gate.snapshotVerified(acquisition.attempt(), acquisition.generation(), nanos.getAsLong(), millis.getAsLong()))
             throw new IOException("Lease expired while preparing world");

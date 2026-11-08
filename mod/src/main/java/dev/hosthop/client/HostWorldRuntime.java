@@ -189,8 +189,11 @@ public final class HostWorldRuntime {
                 abortBeforeStart();
                 if (error instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace && lastStatus.equals("screen.hosthop.host_failed"))
                     tell("screen.hosthop.disk_insufficient");
+                else if (error instanceof dev.hosthop.storage.GoogleDriveSnapshotStore.QuotaExceeded && lastStatus.equals("screen.hosthop.host_failed"))
+                    tell("screen.hosthop.drive_insufficient");
             } else {
-                tell(error instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace ? "screen.hosthop.disk_insufficient" : "screen.hosthop.host_failed");
+                tell(error instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace ? "screen.hosthop.disk_insufficient"
+                        : error instanceof dev.hosthop.storage.GoogleDriveSnapshotStore.QuotaExceeded ? "screen.hosthop.drive_insufficient" : "screen.hosthop.host_failed");
                 cleanup();
             }
         }
@@ -312,8 +315,8 @@ public final class HostWorldRuntime {
                 Files.deleteIfExists(journal);
                 tell("screen.hosthop.saved_world");
             } catch (Exception failure) {
-                tell(failure instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace
-                        ? "screen.hosthop.disk_recovery" : "screen.hosthop.recovery_required");
+                tell(failure instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace ? "screen.hosthop.disk_recovery"
+                        : failure instanceof dev.hosthop.storage.GoogleDriveSnapshotStore.QuotaExceeded ? "screen.hosthop.drive_recovery" : "screen.hosthop.recovery_required");
             } finally { cleanup(); }
         });
     }
