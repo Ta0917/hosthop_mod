@@ -118,3 +118,30 @@ def restore_backup(backup, destination):
             with archive.open("world/" + name) as source, path.open("xb") as target:
                 _copy_verified(source, target, item)
     return len(entries)
+
+
+def main(argv=None):
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Work with a stopped world copy; never use a running world.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    create = commands.add_parser("create", help="create a new verified archive from a stopped world copy")
+    create.add_argument("world_copy")
+    create.add_argument("archive")
+    verify = commands.add_parser("verify", help="verify an archive without extracting")
+    verify.add_argument("archive")
+    restore = commands.add_parser("restore", help="restore into a new, nonexistent directory")
+    restore.add_argument("archive")
+    restore.add_argument("destination")
+    args = parser.parse_args(argv)
+    if args.command == "create":
+        count = create_backup(args.world_copy, args.archive)
+    elif args.command == "verify":
+        count = verify_backup(args.archive)
+    else:
+        count = restore_backup(args.archive, args.destination)
+    print(f"OK: {count} files")
+
+
+if __name__ == "__main__":
+    main()

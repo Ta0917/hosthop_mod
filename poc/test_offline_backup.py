@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -31,6 +33,18 @@ class OfflineBackupTest(unittest.TestCase):
         self.assertEqual(snapshot_manifest.manifest(self.world), snapshot_manifest.manifest(restored))
         with self.assertRaises(FileExistsError):
             backup.restore_backup(self.archive, restored)
+
+    def test_cli_round_trip(self):
+        script = str(Path(backup.__file__).resolve())
+        restored = self.root / "cli-restored"
+        for args in (("create", self.world, self.archive), ("verify", self.archive),
+                     ("restore", self.archive, restored)):
+            result = subprocess.run([sys.executable, script, *map(str, args)], capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("OK: 2 files", result.stdout)
+        self.assertEqual(snapshot_manifest.manifest(self.world), snapshot_manifest.manifest(restored))
+        failure = subprocess.run([sys.executable, script, "restore", str(self.archive), str(restored)], capture_output=True)
+        self.assertNotEqual(0, failure.returncode)
 
     def test_corruption_fails_before_restore(self):
         backup.create_backup(self.world, self.archive)
