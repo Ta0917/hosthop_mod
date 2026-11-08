@@ -6,7 +6,7 @@ from pathlib import Path
 
 def _files(root):
     root = Path(root)
-    if root.is_symlink() or not root.is_dir():
+    if root.is_symlink() or root.is_junction() or not root.is_dir():
         raise ValueError("root must be a non-symlink directory")
     result = []
     for path in root.rglob("*"):
