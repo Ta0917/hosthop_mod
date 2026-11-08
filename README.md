@@ -6,3 +6,4 @@ Minecraft共有ワールドMODの調査・開発プロジェクト。現時点�
 - `python -m unittest discover -s poc -v` でSQLiteのリースモデルを検証できます。
 - `mod/` はNeoForge 26.2.0.6-beta用の最小起動コードです。ビルドとテストサーバーでの読み込みを確認済みですが、共有機能はありません。
 - `poc/snapshot_manifest.py` は停止済みコピーの全ファイルをSHA-256で記録・検証します。一貫したスナップショットの作成やバックアップ機能ではありません。
+- `poc/E4mcMessageProbe.java` は既知のe4mc JARの割当メッセージをオフラインで調査します。トンネル接続やアドレスの自動取得機能ではありません。
