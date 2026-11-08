@@ -36,6 +36,8 @@ public final class LeaseAuthorityClient {
 
     public record Reply(int status, String body) {}
     public record Grant(long epoch, long generation, ConservativeLeaseDeadline deadline) {}
+    public record Endpoint(String world, long epoch, long generation, long revision, String address,
+                           ConservativeLeaseDeadline deadline) {}
     @FunctionalInterface public interface Exchange { Reply send(HttpRequest request) throws IOException, InterruptedException; }
 
     public LeaseAuthorityClient(URI base, String token) {
@@ -69,6 +71,36 @@ public final class LeaseAuthorityClient {
     public Grant renew(String world, String lease, int duration, long expectedEpoch, long marginSeconds) throws IOException, InterruptedException {
         if (expectedEpoch < 1) throw new IllegalArgumentException("Invalid epoch");
         return request("renew", world, lease, duration, expectedEpoch, null, marginSeconds);
+    }
+
+    /** Endpoint authenticity depends on the configured HTTPS authority and its authorization. */
+    public Endpoint endpoint(String world, long marginSeconds) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID)) throw new IllegalArgumentException("Invalid world");
+        var request = HttpRequest.newBuilder(base.resolve("/endpoint-status")).timeout(Duration.ofSeconds(10))
+                .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"world\":\"" + world + "\"}", StandardCharsets.UTF_8)).build();
+        long startNanos = nanos.getAsLong();
+        long startMillis = millis.getAsLong();
+        Reply reply = exchange.send(request);
+        if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES)
+            throw new IOException("No usable endpoint");
+        var fields = parseFields(reply.body());
+        long epoch = required(fields.numbers(), "epoch");
+        long generation = required(fields.numbers(), "generation");
+        long revision = required(fields.numbers(), "endpoint_revision");
+        long serverNow = required(fields.numbers(), "server_now");
+        long expires = required(fields.numbers(), "expires");
+        String address = fields.endpoint();
+        if (epoch < 1 || generation < 0 || revision < 0 || serverNow < 0 || address == null
+                || !address.matches("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.e4mc\\.link"))
+            throw new IOException("Invalid endpoint response");
+        try {
+            var deadline = ConservativeLeaseDeadline.fromGrant(startNanos, startMillis, serverNow, expires, marginSeconds);
+            if (!deadline.isUsable(nanos.getAsLong(), millis.getAsLong())) throw new IOException("Endpoint expired in transit");
+            return new Endpoint(world, epoch, generation, revision, address, deadline);
+        } catch (IllegalArgumentException | ArithmeticException invalid) {
+            throw new IOException("Invalid endpoint response", invalid);
+        }
     }
 
     private Grant request(String route, String world, String lease, int duration, long expectedEpoch, String expectedOwner, long margin) throws IOException, InterruptedException {
@@ -108,12 +140,13 @@ public final class LeaseAuthorityClient {
         return value;
     }
 
-    private record Fields(Map<String, Long> numbers, String owner) {}
+    private record Fields(Map<String, Long> numbers, String owner, String endpoint) {}
 
     private static Fields parseFields(String text) throws IOException {
         var values = new HashMap<String, Long>();
         var names = new HashSet<String>();
         String owner = null;
+        String endpoint = null;
         try (var reader = new JsonReader(new StringReader(text))) {
             reader.setLenient(false);
             reader.beginObject();
@@ -121,7 +154,8 @@ public final class LeaseAuthorityClient {
                 String name = reader.nextName();
                 if (!names.add(name)) throw new IOException("Duplicate response field");
                 if (name.equals("epoch") || name.equals("generation") || name.equals("base_generation")
-                        || name.equals("duration_seconds") || name.equals("active") || name.equals("server_now") || name.equals("expires")) {
+                        || name.equals("duration_seconds") || name.equals("active") || name.equals("endpoint_revision")
+                        || name.equals("server_now") || name.equals("expires")) {
                     if (reader.peek() != JsonToken.NUMBER) throw new IOException("Invalid response field");
                     String value = reader.nextString();
                     if (!value.matches("-?(0|[1-9][0-9]*)")) throw new IOException("Invalid response number");
@@ -129,11 +163,14 @@ public final class LeaseAuthorityClient {
                 } else if (name.equals("owner")) {
                     if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid response owner");
                     owner = reader.nextString();
+                } else if (name.equals("endpoint")) {
+                    if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid response endpoint");
+                    endpoint = reader.nextString();
                 } else reader.skipValue();
             }
             reader.endObject();
             if (reader.peek() != JsonToken.END_DOCUMENT) throw new IOException("Trailing response data");
-            return new Fields(values, owner);
+            return new Fields(values, owner, endpoint);
         } catch (IllegalStateException | NumberFormatException invalid) {
             throw new IOException("Invalid lease response", invalid);
         }

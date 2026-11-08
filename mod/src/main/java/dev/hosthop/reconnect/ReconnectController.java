@@ -1,5 +1,7 @@
 package dev.hosthop.reconnect;
 
+import dev.hosthop.lease.LeaseAuthorityClient;
+
 /**
  * Retry policy only. Does not authenticate endpoints, connect Minecraft, observe
  * disconnect reasons or persist state; an adapter must do all of those things.
@@ -9,7 +11,6 @@ public final class ReconnectController {
     public enum Failure { TRANSIENT, USER_CANCELLED, KICKED, AUTHENTICATION, INCOMPATIBLE }
     public static final class Session { private Session() {} }
     public static final class Attempt { private Attempt() {} }
-    public record Destination(String world, long epoch, String address) {}
 
     private static final int MAX_ATTEMPTS = 5;
     private static final long BASE_DELAY_NANOS = 1_000_000_000L;
@@ -37,11 +38,12 @@ public final class ReconnectController {
     }
 
     /** Caller must authenticate the current authority result and its freshness. */
-    public synchronized Attempt connect(Session session, Destination destination, long nowNanos) {
+    public synchronized Attempt connect(Session session, LeaseAuthorityClient.Endpoint destination, long nowNanos, long nowMillis) {
         if (session == null || session != this.session || state != State.WAITING || !timeValid(nowNanos)) return null;
         if (nowNanos - nextTime < 0 || destination == null || !world.equals(destination.world())
                 || destination.epoch() < lastEpoch || destination.address() == null
-                || destination.address().isBlank() || destination.address().length() > 255) return null;
+                || destination.address().isBlank() || destination.address().length() > 255 || destination.deadline() == null
+                || !destination.deadline().isUsable(nowNanos, nowMillis)) return null;
         lastEpoch = destination.epoch();
         attempts++;
         attempt = new Attempt();

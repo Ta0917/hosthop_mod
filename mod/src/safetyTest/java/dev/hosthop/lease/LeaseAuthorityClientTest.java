@@ -13,7 +13,7 @@ public final class LeaseAuthorityClientTest {
                 "{\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         var client = new LeaseAuthorityClient(URI.create("https://authority.example/"), "a".repeat(43),
                 request -> {
-                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status").contains(request.uri().getPath()));
+                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status").contains(request.uri().getPath()));
                     check(request.headers().firstValue("Authorization").orElseThrow().equals("Bearer " + "a".repeat(43)));
                     return reply.get();
                 }, nanos::get, millis::get);
@@ -27,6 +27,11 @@ public final class LeaseAuthorityClientTest {
         expectFailure(() -> client.lookupAcquisition("world", "lease", 29, "owner", 2));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"owner\":\"owner\",\"epoch\":4,\"base_generation\":3,\"duration_seconds\":30,\"active\":0,\"server_now\":100,\"expires\":130}"));
         expectFailure(() -> client.lookupAcquisition("world", "lease", 30, "owner", 2));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"endpoint\":\"example.e4mc.link\",\"endpoint_revision\":7,\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
+        var endpoint = client.endpoint("world", 2);
+        check(endpoint.epoch() == 4 && endpoint.revision() == 7 && endpoint.address().equals("example.e4mc.link"));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"endpoint\":\"example.evil.invalid\",\"endpoint_revision\":7,\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
+        expectFailure(() -> client.endpoint("world", 2));
         reply.set(new LeaseAuthorityClient.Reply(409, "{}"));
         expectFailure(() -> client.acquire("world", "lease", 30, 2));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"epoch\":5,\"generation\":3,\"server_now\":100,\"expires\":130}"));
