@@ -13,4 +13,10 @@ public abstract class StopMixin {
         CapturedEndpoint.address = null;
         System.out.println("HOSTHOP_PROBE assignment cleared on stop");
     }
+
+    @Inject(method = "fail(Ljava/lang/Throwable;)V", at = @At("HEAD"), remap = false)
+    private void hosthop$clearOnFailure(Throwable error, CallbackInfo ci) {
+        CapturedEndpoint.address = null;
+        System.out.println("HOSTHOP_PROBE assignment cleared on failure");
+    }
 }

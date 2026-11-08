@@ -63,6 +63,24 @@ public final class E4mcRelayProbe {
             int protocol = SharedConstants.getCurrentVersion().protocolVersion();
             ping(CapturedEndpoint.address, 25565, protocol);
             System.out.println("HOSTHOP_PROBE Minecraft status response verified=true");
+            int holdSeconds = Math.max(0, Math.min(60, Integer.getInteger("hosthop.e4mcHoldSeconds", 0)));
+            if (holdSeconds > 0) {
+                System.out.println("HOSTHOP_PROBE monitoring interval started");
+                Thread.sleep(TimeUnit.SECONDS.toMillis(holdSeconds));
+                System.out.println("HOSTHOP_PROBE monitoring interval ended");
+            }
+            if (Boolean.getBoolean("hosthop.e4mcDropProbe")) {
+                var channelField = session.getClass().getDeclaredField("quicChannel");
+                if (!channelField.trySetAccessible()) throw new IllegalStateException("Cannot inspect relay channel");
+                Object channel = channelField.get(session);
+                if (!(channel instanceof io.netty.channel.Channel relay)) throw new IllegalStateException("Relay channel unavailable");
+                relay.close().syncUninterruptibly();
+                long dropDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                while (CapturedEndpoint.address != null && System.nanoTime() < dropDeadline) Thread.sleep(50);
+                boolean cleared = CapturedEndpoint.address == null;
+                System.out.println("HOSTHOP_PROBE assignment absent after forced channel close=" + cleared);
+                if (!cleared) throw new IllegalStateException("Stale assignment after channel close");
+            }
         } catch (Throwable e) {
             failure = e;
             System.out.println("HOSTHOP_PROBE failure=" + e.getClass().getSimpleName());

@@ -3,6 +3,6 @@
   "minVersion": "0.8",
   "package": "dev.hosthop.probe.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": ["AssignmentMixin", "StopMixin", "GameTestWaitMixin"],
+  "mixins": ["AssignmentMixin", "StopMixin", "ChannelInactiveMixin", "GameTestWaitMixin"],
   "injectors": { "defaultRequire": 1 }
 }

@@ -80,6 +80,10 @@ neoForge {
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
             if (project.hasProperty('e4mcRelayProbe')) {
                 systemProperty 'hosthop.e4mcRelayProbe', 'true'
+                systemProperty 'hosthop.e4mcHoldSeconds', project.findProperty('e4mcHoldSeconds') ?: '0'
+                if (project.hasProperty('e4mcDropProbe')) {
+                    systemProperty 'hosthop.e4mcDropProbe', 'true'
+                }
                 if (project.hasProperty('e4mcLocalOnly')) {
                     systemProperty 'hosthop.e4mcLocalOnly', 'true'
                 }
