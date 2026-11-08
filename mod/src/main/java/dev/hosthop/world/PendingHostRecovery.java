@@ -1,8 +1,13 @@
 package dev.hosthop.world;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.UUID;
+import dev.hosthop.lease.PendingPublicationJournal;
+import dev.hosthop.lease.PublicationRecord;
 
 /** Recovery only for a locally locked session recorded before server launch. */
 public final class PendingHostRecovery {
@@ -13,6 +18,31 @@ public final class PendingHostRecovery {
         void run(String world, String principal, String lease) throws IOException, InterruptedException;
     }
     private PendingHostRecovery() {}
+    public record Committed(Path world, Path journal, PublicationRecord record) {}
+
+    /** Validate local evidence before attempting an authenticated release. */
+    public static Committed findCommitted(Map<String, String> evidence, String worldId, String principal, Path gameDirectory) throws IOException {
+        if (evidence == null || !"starting".equals(evidence.get("stage")) || !worldId.equals(evidence.get("world"))
+                || !principal.equals(evidence.get("principal"))) return null;
+        String id = evidence.get("lease"), level = evidence.get("level");
+        long epoch, generation;
+        try {
+            if (id == null || !UUID.fromString(id).toString().equals(id) || !id.equals(evidence.get("session"))
+                    || !("hosthop_" + id.replace("-", "")).equals(level)) return null;
+            epoch = Long.parseLong(evidence.get("epoch")); generation = Long.parseLong(evidence.get("generation"));
+        } catch (RuntimeException invalid) { return null; }
+        Path game = gameDirectory.toRealPath();
+        Path session = game.resolve("hosthop").resolve("sessions").resolve(id);
+        Path world = game.resolve("saves").resolve(level);
+        Path journal = session.resolve("publication.dat");
+        if (!Files.isDirectory(session, LinkOption.NOFOLLOW_LINKS) || !session.toRealPath().startsWith(game)
+                || !Files.isDirectory(world, LinkOption.NOFOLLOW_LINKS) || !world.toRealPath().startsWith(game)
+                || !Files.isRegularFile(journal, LinkOption.NOFOLLOW_LINKS)) return null;
+        var record = PendingPublicationJournal.read(journal);
+        if (!record.worldId().equals(worldId) || !record.owner().equals(principal) || !record.leaseId().equals(id)
+                || record.epoch() != epoch || record.previousGeneration() != generation) return null;
+        return new Committed(world, journal, record);
+    }
 
     /** Caller must hold the same exclusive process lock used by every local host. */
     public static boolean abortUnstarted(Map<String, String> pending, String world, String principal, Abort abort, Cancel cancel)

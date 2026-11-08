@@ -124,8 +124,18 @@ public final class LeaseServiceIntegrationProbe {
             try { transfer.recoverStopped(acquisition.attempt(), journal); throw new AssertionError("lost release reply was accepted"); }
             catch (java.io.IOException expected) { }
             check(Files.exists(journal));
-            transfer.recoverStopped(acquisition.attempt(), journal);
-            check(gate.phase() == LocalHostGate.Phase.IDLE && !Files.exists(journal));
+            // A new process must be able to reconcile both the committed snapshot
+            // and an already-applied release without losing its local evidence.
+            var restartedGate = new LocalHostGate();
+            var restarted = new SharedWorldTransfer(restartedGate, client, storage, System::nanoTime, System::currentTimeMillis);
+            var restoredAttempt = restartedGate.beginRecovery(PendingPublicationJournal.read(journal));
+            restarted.recoverStopped(restoredAttempt, journal, true);
+            check(restartedGate.phase() == LocalHostGate.Phase.IDLE && Files.exists(journal));
+            var againGate = new LocalHostGate();
+            var again = new SharedWorldTransfer(againGate, client, storage, System::nanoTime, System::currentTimeMillis);
+            again.recoverStopped(againGate.beginRecovery(PendingPublicationJournal.read(journal)), journal, true);
+            check(againGate.phase() == LocalHostGate.Phase.IDLE && Files.exists(journal));
+            Files.delete(journal);
             var nextGate = new LocalHostGate();
             var next = new LeaseCoordinator(nextGate, client, System::nanoTime, System::currentTimeMillis);
             var nextAcquisition = next.begin("world", "next-lease", "owner", 30, 2);

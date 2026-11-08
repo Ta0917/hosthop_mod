@@ -33,6 +33,28 @@ public final class PendingHostRecoveryTest {
             throw new AssertionError("Failed abort must not be treated as recovered");
         } catch (IOException expected) { }
         check(calls.get() == 2);
+        var root = java.nio.file.Files.createTempDirectory("hosthop-pending-recovery-");
+        try {
+            var session = java.nio.file.Files.createDirectories(root.resolve("hosthop").resolve("sessions").resolve(id));
+            var localWorld = java.nio.file.Files.createDirectories(root.resolve("saves").resolve(pending.get("level")));
+            var journal = session.resolve("publication.dat");
+            var record = new dev.hosthop.lease.PublicationRecord("world", "op", "owner", id, 4, 2, "digest", "file", 1, 3);
+            dev.hosthop.lease.PendingPublicationJournal.create(journal, record);
+            pending.put("stage", "starting");
+            var found = PendingHostRecovery.findCommitted(pending, "world", "owner", root);
+            check(found != null && found.world().equals(localWorld) && found.record().equals(record));
+            check(PendingHostRecovery.findCommitted(pending, "world", "other", root) == null);
+            pending.put("epoch", "5");
+            check(PendingHostRecovery.findCommitted(pending, "world", "owner", root) == null);
+            pending.put("epoch", "4");
+            java.nio.file.Files.write(journal, new byte[] {1, 2, 3});
+            try { PendingHostRecovery.findCommitted(pending, "world", "owner", root); throw new AssertionError("Corrupt evidence accepted"); }
+            catch (IOException expected) { }
+        } finally {
+            try (var paths = java.nio.file.Files.walk(root)) {
+                for (var path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) java.nio.file.Files.delete(path);
+            }
+        }
         System.out.println("Pending pre-launch recovery checks passed");
     }
     private static void check(boolean value) { if (!value) throw new AssertionError(); }

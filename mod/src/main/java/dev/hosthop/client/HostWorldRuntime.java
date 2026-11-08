@@ -125,10 +125,12 @@ public final class HostWorldRuntime {
             if (pending.exists()) {
                 // These stages are written before Minecraft can be launched. A later
                 // stage may contain unsaved play and must never be discarded this way.
-                if (!PendingHostRecovery.abortUnstarted(pending.load(), invitation.world(), invitation.principal(), authority::abort, authority::cancelAcquisition)) {
+                var evidence = pending.load();
+                if (!PendingHostRecovery.abortUnstarted(evidence, invitation.world(), invitation.principal(), authority::abort, authority::cancelAcquisition)
+                        && !recoverCommittedHost(evidence)) {
                     tell("screen.hosthop.recovery_required"); cleanup(); return;
                 }
-                Files.delete(pendingPath);
+                Files.deleteIfExists(pendingPath);
             }
             String id = UUID.randomUUID().toString();
             Path game = minecraft.gameDirectory.toPath().toAbsolutePath().normalize();
@@ -193,6 +195,19 @@ public final class HostWorldRuntime {
         if (!source.startsWith(root) || Files.isSymbolicLink(source) || !Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS))
             throw new IOException("Initial world not found");
         return source;
+    }
+
+    /** Recover only a committed publication written after a verified server stop. */
+    private boolean recoverCommittedHost(Map<String, String> evidence) throws IOException, InterruptedException {
+        var candidate = PendingHostRecovery.findCommitted(evidence, invitation.world(), invitation.principal(), minecraft.gameDirectory.toPath());
+        if (candidate == null) return false;
+        try (var lock = dev.hosthop.snapshot.StoppedWorldLock.acquire(candidate.world())) {
+            var recovery = gate.beginRecovery(candidate.record());
+            transfer.recoverStopped(recovery, candidate.journal(), true);
+            Files.delete(pendingPath);
+            Files.delete(candidate.journal());
+        }
+        return true;
     }
 
     private Map<String, String> pendingData(String stage, String id, String levelId) {
@@ -274,15 +289,16 @@ public final class HostWorldRuntime {
                 Path journal = sessionDir.resolve("publication.dat");
                 try {
                     transfer.publishAfterStopped(acquisition, worldPath, sessionDir.resolve("final.zip"), journal,
-                            UUID.randomUUID().toString(), invitation.folder(), token);
+                            UUID.randomUUID().toString(), invitation.folder(), token, true);
                 } catch (IOException | InterruptedException failure) {
                     if (Files.exists(journal) && gate.phase() == LocalHostGate.Phase.STOP_REQUIRED)
-                        transfer.recoverStopped(acquisition.attempt(), journal);
+                        transfer.recoverStopped(acquisition.attempt(), journal, true);
                     else if (Files.exists(journal) && gate.phase() == LocalHostGate.Phase.RELEASE_REQUIRED)
-                        transfer.completeRelease(acquisition.attempt(), journal, PendingPublicationJournal.read(journal));
+                        transfer.completeRelease(acquisition.attempt(), journal, PendingPublicationJournal.read(journal), true);
                     else throw failure;
                 }
                 Files.deleteIfExists(pendingPath);
+                Files.deleteIfExists(journal);
                 tell("screen.hosthop.saved_world");
             } catch (Exception failure) {
                 tell("screen.hosthop.recovery_required");

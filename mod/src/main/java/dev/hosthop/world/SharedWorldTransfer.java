@@ -53,6 +53,13 @@ public final class SharedWorldTransfer {
     public PublicationRecord publishAfterStopped(LeaseCoordinator.Acquisition acquisition, Path stoppedWorld, Path archive,
                                                  Path journal, String operationId, String folderId, String driveToken)
             throws IOException, InterruptedException {
+        return publishAfterStopped(acquisition, stoppedWorld, archive, journal, operationId, folderId, driveToken, false);
+    }
+
+    /** Retain the receipt journal until the caller clears its separate host journal. */
+    public PublicationRecord publishAfterStopped(LeaseCoordinator.Acquisition acquisition, Path stoppedWorld, Path archive,
+                                                 Path journal, String operationId, String folderId, String driveToken, boolean retainJournal)
+            throws IOException, InterruptedException {
         if (acquisition == null || acquisition.epoch() < 1 || acquisition.generation() < 0) throw new IllegalStateException("Lease not acquired");
         if (acquisition.generation() == Long.MAX_VALUE || operationId == null || !operationId.matches("[A-Za-z0-9_-]{1,80}"))
             throw new IllegalArgumentException("Invalid publication operation");
@@ -74,24 +81,32 @@ public final class SharedWorldTransfer {
             gate.requireStop(acquisition.attempt());
             throw failure;
         }
-        completeRelease(acquisition.attempt(), journal, operation);
+        completeRelease(acquisition.attempt(), journal, operation, retainJournal);
         return operation;
     }
 
     /** Safe to retry after a lost release response. */
     public void completeRelease(LocalHostGate.Attempt attempt, Path journal, PublicationRecord operation) throws IOException, InterruptedException {
+        completeRelease(attempt, journal, operation, false);
+    }
+
+    public void completeRelease(LocalHostGate.Attempt attempt, Path journal, PublicationRecord operation, boolean retainJournal) throws IOException, InterruptedException {
         if (!gate.awaitingRelease(attempt, operation) || !PendingPublicationJournal.read(journal).equals(operation)) throw new IOException("Publication journal mismatch");
         var receipt = authority.release(operation);
         if (!receipt.matches(operation)) throw new IOException("Release receipt mismatch");
         synchronized (gate) {
             if (!gate.awaitingRelease(attempt, operation) || !PendingPublicationJournal.read(journal).equals(operation)) throw new IOException("Release state changed");
-            Files.delete(journal);
+            if (!retainJournal) Files.delete(journal);
             if (!gate.confirmReleased(attempt, receipt)) throw new IOException("Release state changed");
         }
     }
 
     /** Call only after the server and relay are stopped, with the matching persisted journal. */
     public void recoverStopped(LocalHostGate.Attempt attempt, Path journal) throws IOException, InterruptedException {
+        recoverStopped(attempt, journal, false);
+    }
+
+    public void recoverStopped(LocalHostGate.Attempt attempt, Path journal, boolean retainJournal) throws IOException, InterruptedException {
         var operation = PendingPublicationJournal.read(journal);
         if (!gate.awaitingReconciliation(attempt, operation)) throw new IOException("Publication recovery state mismatch");
         var receipt = authority.commitStatus(operation);
@@ -99,7 +114,7 @@ public final class SharedWorldTransfer {
         synchronized (gate) {
             if (!gate.awaitingReconciliation(attempt, operation) || !PendingPublicationJournal.read(journal).equals(operation)) throw new IOException("Publication recovery state changed");
             if (!gate.publicationReconciled(attempt, receipt)) throw new IOException("Publication reconciliation rejected");
-            Files.delete(journal);
+            if (!retainJournal) Files.delete(journal);
             if (!gate.confirmStopped(attempt)) throw new IOException("Stop confirmation rejected");
         }
     }
