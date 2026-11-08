@@ -14,6 +14,7 @@ import dev.hosthop.storage.GoogleDriveAuthorization;
 import dev.hosthop.storage.WindowsSecretStore;
 import dev.hosthop.storage.SnapshotStore;
 import dev.hosthop.world.SaveFailureMonitor;
+import dev.hosthop.world.PendingHostRecovery;
 import dev.hosthop.world.ServerStopSignal;
 import dev.hosthop.world.SharedWorldTransfer;
 import java.io.IOException;
@@ -121,7 +122,14 @@ public final class HostWorldRuntime {
             if (processLock == null) throw new IOException("HostHop is already running");
             pendingPath = config.resolve("pending-host.dat");
             var pending = new WindowsSecretStore(pendingPath);
-            if (pending.exists()) { tell("screen.hosthop.recovery_required"); cleanup(); return; }
+            if (pending.exists()) {
+                // Only "preparing" is written before Minecraft can be launched. A later
+                // stage may contain unsaved play and must never be discarded this way.
+                if (!PendingHostRecovery.abortUnstarted(pending.load(), invitation.world(), invitation.principal(), authority::abort)) {
+                    tell("screen.hosthop.recovery_required"); cleanup(); return;
+                }
+                Files.delete(pendingPath);
+            }
             String id = UUID.randomUUID().toString();
             Path game = minecraft.gameDirectory.toPath().toAbsolutePath().normalize();
             Path saves = game.resolve("saves");
