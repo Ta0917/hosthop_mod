@@ -75,7 +75,8 @@ public final class HostRuntimeSmoke {
                 minecraft.disconnect(new TitleScreen(), false);
                 stage = 4;
             } else if (stage == 4 && !HostWorldRuntime.active()) {
-                if (!HostWorldRuntime.lastStatus().equals("screen.hosthop.saved_world")) throw new IllegalStateException("first save failed: " + HostWorldRuntime.lastStatus());
+                String expected = Boolean.getBoolean("hosthop.interruptedSmoke") ? "screen.hosthop.recovery_required" : "screen.hosthop.saved_world";
+                if (!HostWorldRuntime.lastStatus().equals(expected)) throw new IllegalStateException("first save result unexpected: " + HostWorldRuntime.lastStatus());
                 if (!HostWorldRuntime.startWithStore(context.invitation(), context.credentials(), "", key -> {}, context.storage(), context.authority()))
                     throw new IllegalStateException("second host did not start");
                 stage = 5;
@@ -145,6 +146,10 @@ public final class HostRuntimeSmoke {
                 private int count;
                 private final java.util.Map<String, Path> objects = new java.util.HashMap<>();
                 @Override public GoogleDriveSnapshotStore.ObjectRef upload(Path archive, String folder, String accessToken) throws java.io.IOException, InterruptedException {
+                    if (Boolean.getBoolean("hosthop.interruptedSmoke") && count == 0) {
+                        count++;
+                        throw new java.io.IOException("simulated interrupted upload");
+                    }
                     String id = "file-" + ++count;
                     Path copy = temp.resolve(id + ".zip");
                     Files.copy(archive, copy); objects.put(id, copy);

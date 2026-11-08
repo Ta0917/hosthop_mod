@@ -11,7 +11,22 @@ public final class LocalHostGateTest {
         publicationJournalPreservesEvidence();
         recoveryBlocksNewHostUntilReceiptMatches();
         preparationRecordsBeforeSendAndStopsOnFailure();
+        stoppedRecoveryRequiresLiveOriginalGrant();
         System.out.println("LocalHostGate safety checks passed");
+    }
+
+    private static void stoppedRecoveryRequiresLiveOriginalGrant() {
+        var gate = new LocalHostGate();
+        var attempt = gate.beginAcquire();
+        check(!gate.resumeStopped(attempt, 0, 0), "recovered without a grant");
+        check(gate.acceptGrant(attempt, 6, 11, deadline(), 0, 0), "grant rejected");
+        check(gate.resumeStopped(attempt, 0, 0), "stopped recovery rejected");
+        check(!gate.beginHosting(attempt, 0, 0), "stopped recovery began hosting");
+        check(gate.serverStoppedForSnapshot(attempt, 0, 0), "stopped recovery cannot snapshot");
+        var expired = new LocalHostGate();
+        var old = expired.beginAcquire();
+        check(expired.acceptGrant(old, 6, 11, deadline(), 0, 0), "grant rejected");
+        check(!expired.resumeStopped(old, 30_000_000_000L, 30_000), "expired recovery allowed");
     }
 
     private static LocalHostGate.Attempt readyToPublish(LocalHostGate gate) {

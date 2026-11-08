@@ -19,10 +19,31 @@ public final class PendingHostRecovery {
     }
     private PendingHostRecovery() {}
     public record Committed(Path world, Path journal, PublicationRecord record) {}
+    public record Stopped(Path world, Path session, String lease, long epoch, long generation) {}
+
+    /** A stopped marker is written only after the server and relay have fully stopped. */
+    public static Stopped findStopped(Map<String, String> evidence, String worldId, String principal, Path gameDirectory) throws IOException {
+        if (evidence == null || !"stopped".equals(evidence.get("stage")) || !worldId.equals(evidence.get("world"))
+                || !principal.equals(evidence.get("principal"))) return null;
+        String id = evidence.get("lease"), level = evidence.get("level");
+        long epoch, generation;
+        try {
+            if (id == null || !UUID.fromString(id).toString().equals(id) || !id.equals(evidence.get("session"))
+                    || !("hosthop_" + id.replace("-", "")).equals(level)) return null;
+            epoch = Long.parseLong(evidence.get("epoch")); generation = Long.parseLong(evidence.get("generation"));
+            if (epoch < 1 || generation < 0) return null;
+        } catch (RuntimeException invalid) { return null; }
+        Path game = gameDirectory.toRealPath();
+        Path session = game.resolve("hosthop").resolve("sessions").resolve(id);
+        Path world = game.resolve("saves").resolve(level);
+        if (!Files.isDirectory(session, LinkOption.NOFOLLOW_LINKS) || !session.toRealPath().startsWith(game)
+                || !Files.isDirectory(world, LinkOption.NOFOLLOW_LINKS) || !world.toRealPath().startsWith(game)) return null;
+        return new Stopped(world, session, id, epoch, generation);
+    }
 
     /** Validate local evidence before attempting an authenticated release. */
     public static Committed findCommitted(Map<String, String> evidence, String worldId, String principal, Path gameDirectory) throws IOException {
-        if (evidence == null || !"starting".equals(evidence.get("stage")) || !worldId.equals(evidence.get("world"))
+        if (evidence == null || !("starting".equals(evidence.get("stage")) || "stopped".equals(evidence.get("stage"))) || !worldId.equals(evidence.get("world"))
                 || !principal.equals(evidence.get("principal"))) return null;
         String id = evidence.get("lease"), level = evidence.get("level");
         long epoch, generation;

@@ -72,6 +72,14 @@ public final class LocalHostGate {
         return true;
     }
 
+    /** Caller must prove that this exact local server and relay have fully stopped. */
+    public synchronized boolean resumeStopped(Attempt attempt, long nowNanos, long nowMillis) {
+        if (attempt == null || attempt != current || phase != Phase.PREPARING || !checkDeadline(nowNanos, nowMillis)) return false;
+        everHosted = true;
+        phase = Phase.QUIESCING;
+        return true;
+    }
+
     public synchronized boolean beginHosting(Attempt attempt, long nowNanos, long nowMillis) {
         if (attempt == null || attempt != current || phase != Phase.PREPARING || !snapshotVerified) return false;
         if (!checkDeadline(nowNanos, nowMillis)) return false;

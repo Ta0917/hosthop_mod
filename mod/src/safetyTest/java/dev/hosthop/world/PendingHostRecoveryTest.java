@@ -43,6 +43,11 @@ public final class PendingHostRecoveryTest {
             pending.put("stage", "starting");
             var found = PendingHostRecovery.findCommitted(pending, "world", "owner", root);
             check(found != null && found.world().equals(localWorld) && found.record().equals(record));
+            check(PendingHostRecovery.findStopped(pending, "world", "owner", root) == null);
+            pending.put("stage", "stopped");
+            var stopped = PendingHostRecovery.findStopped(pending, "world", "owner", root);
+            check(stopped != null && stopped.world().equals(localWorld) && stopped.epoch() == 4 && stopped.generation() == 2);
+            check(PendingHostRecovery.findCommitted(pending, "world", "owner", root) != null);
             check(PendingHostRecovery.findCommitted(pending, "world", "other", root) == null);
             pending.put("epoch", "5");
             check(PendingHostRecovery.findCommitted(pending, "world", "owner", root) == null);

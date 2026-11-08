@@ -128,7 +128,8 @@ public final class HostWorldRuntime {
                 try {
                     var evidence = pending.load();
                     if (!PendingHostRecovery.abortUnstarted(evidence, invitation.world(), invitation.principal(), authority::abort, authority::cancelAcquisition)
-                            && !recoverCommittedHost(evidence, token.accessToken())) {
+                            && !recoverCommittedHost(evidence, token.accessToken())
+                            && !recoverStoppedHost(evidence, token.accessToken())) {
                         tell("screen.hosthop.recovery_required"); cleanup(); return;
                     }
                     Files.deleteIfExists(pendingPath);
@@ -160,7 +161,8 @@ public final class HostWorldRuntime {
             }
             pending.save(pendingData("preparing", id, levelId));
             stage = "restoring world";
-            renewer.scheduleWithFixedDelay(this::renew, 15, 15, TimeUnit.SECONDS);
+            var activeLease = acquisition;
+            renewer.scheduleWithFixedDelay(() -> renew(activeLease), 15, 15, TimeUnit.SECONDS);
             if (cancelled.get()) { abortBeforeStart(); return; }
             transfer.prepare(acquisition, initial, sessionDir.resolve("initial.zip"), worldPath, token.accessToken());
             if (cancelled.get()) { abortBeforeStart(); return; }
@@ -224,6 +226,33 @@ public final class HostWorldRuntime {
         return true;
     }
 
+    /** Retry an interrupted snapshot only while its original lease is still active. */
+    private boolean recoverStoppedHost(Map<String, String> evidence, String driveToken) throws IOException, InterruptedException {
+        var stopped = PendingHostRecovery.findStopped(evidence, invitation.world(), invitation.principal(), minecraft.gameDirectory.toPath());
+        if (stopped == null) return false;
+        Path journal = stopped.session().resolve("publication.dat");
+        // A journal may identify a commit already in flight; never replace it.
+        if (Files.exists(journal, LinkOption.NOFOLLOW_LINKS)) return false;
+        LeaseCoordinator.Acquisition recovered;
+        try (var lock = dev.hosthop.snapshot.StoppedWorldLock.acquire(stopped.world())) {
+            recovered = coordinator.begin(invitation.world(), stopped.lease(), invitation.principal(), 90, 5);
+            if (!coordinator.recoverAcquisition(recovered) || recovered.epoch() != stopped.epoch()
+                    || recovered.generation() != stopped.generation()
+                    || !gate.resumeStopped(recovered.attempt(), System.nanoTime(), System.currentTimeMillis()))
+                throw new IOException("Stopped host lease cannot be recovered");
+            acquisition = recovered;
+        }
+        var renewal = renewer.scheduleWithFixedDelay(() -> renew(recovered), 15, 15, TimeUnit.SECONDS);
+        try {
+            Path archive = stopped.session().resolve("retry-" + UUID.randomUUID() + ".zip");
+            transfer.publishAfterStopped(recovered, stopped.world(), archive, journal, UUID.randomUUID().toString(),
+                    invitation.folder(), driveToken, true);
+            Files.delete(pendingPath);
+            Files.delete(journal);
+        } finally { renewal.cancel(false); }
+        return true;
+    }
+
     private Map<String, String> pendingData(String stage, String id, String levelId) {
         var values = new java.util.HashMap<String, String>();
         values.put("world", invitation.world()); values.put("lease", id); values.put("principal", invitation.principal());
@@ -234,12 +263,15 @@ public final class HostWorldRuntime {
         return values;
     }
 
-    private void renew() {
+    private void renew(LeaseCoordinator.Acquisition target) {
         try {
-            if (acquisition != null && !coordinator.renew(acquisition)
+            if (target == null || acquisition != target) return;
+            boolean renewed = coordinator.renew(target);
+            if (acquisition != target) return;
+            if (!renewed
                     && gate.phase() != LocalHostGate.Phase.IDLE && gate.phase() != LocalHostGate.Phase.RELEASE_REQUIRED
                     && gate.phase() != LocalHostGate.Phase.ABORTING) fail("screen.hosthop.lease_failed");
-        } catch (Exception failure) { fail("screen.hosthop.lease_failed"); }
+        } catch (Exception failure) { if (acquisition == target) fail("screen.hosthop.lease_failed"); }
     }
 
     private void abortBeforeStart() {
@@ -298,6 +330,7 @@ public final class HostWorldRuntime {
                 for (int i = 0; i < 50 && relay.sessionOpen(); i++) Thread.sleep(100);
                 CompletableFuture.runAsync(() -> {}, relayWorker).get(15, TimeUnit.SECONDS);
                 if (relay.sessionOpen() || gate.phase() != LocalHostGate.Phase.QUIESCING) throw new IOException("Relay did not close");
+                new WindowsSecretStore(pendingPath).save(pendingData("stopped", acquisition.lease(), worldPath.getFileName().toString()));
                 tell("screen.hosthop.saving_world");
                 String token = credentials.access().accessToken();
                 Path journal = sessionDir.resolve("publication.dat");

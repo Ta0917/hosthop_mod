@@ -168,6 +168,23 @@ public final class LeaseServiceIntegrationProbe {
             check(Files.exists(missingJournal) && recoverGate.phase() == LocalHostGate.Phase.IDLE && client.snapshot("world").generation() == 3);
             check(client.history("world").stream().map(LeaseAuthorityClient.Snapshot::generation).toList().equals(java.util.List.of(3L, 2L, 1L)));
             Files.delete(missingJournal);
+            // An interrupted upload leaves its partial archive untouched; a new
+            // stopped process resumes the same live lease and creates a new archive.
+            var originalStoppedGate = new LocalHostGate();
+            var originalStopped = new LeaseCoordinator(originalStoppedGate, client, System::nanoTime, System::currentTimeMillis);
+            var stoppedLease = originalStopped.begin("world", "stopped-lease", "owner", 30, 2);
+            check(originalStopped.acquire(stoppedLease));
+            var interruptedArchive = directory.resolve("interrupted.zip");
+            Files.writeString(interruptedArchive, "partial");
+            var restartedStoppedGate = new LocalHostGate();
+            var restartedStopped = new LeaseCoordinator(restartedStoppedGate, client, System::nanoTime, System::currentTimeMillis);
+            var sameLease = restartedStopped.begin("world", "stopped-lease", "owner", 30, 2);
+            check(restartedStopped.recoverAcquisition(sameLease) && sameLease.epoch() == stoppedLease.epoch() && sameLease.generation() == 3);
+            check(restartedStoppedGate.resumeStopped(sameLease.attempt(), System.nanoTime(), System.currentTimeMillis()));
+            var stoppedTransfer = new SharedWorldTransfer(restartedStoppedGate, client, storage, System::nanoTime, System::currentTimeMillis);
+            stoppedTransfer.publishAfterStopped(sameLease, preparedB, directory.resolve("retry.zip"), directory.resolve("retry-journal"),
+                    "retry-op", "folder", "drive-test-token");
+            check(Files.readString(interruptedArchive).equals("partial") && client.snapshot("world").generation() == 4);
             var thirdGate = new LocalHostGate();
             var third = new LeaseCoordinator(thirdGate, client, System::nanoTime, System::currentTimeMillis);
             var thirdAcquisition = third.begin("world", "third-lease", "owner", 30, 2);
@@ -175,7 +192,7 @@ public final class LeaseServiceIntegrationProbe {
             post(http, base, "/test-expire", "{}");
             var expiredJournal = directory.resolve("expired-pending");
             var expiredRecord = new PublicationRecord("world", "expired-op", "owner", "third-lease",
-                    thirdAcquisition.epoch(), 3, object.sha256(), object.fileId(), object.size(), 4);
+                    thirdAcquisition.epoch(), 4, object.sha256(), object.fileId(), object.size(), 5);
             PendingPublicationJournal.create(expiredJournal, expiredRecord);
             var expiredGate = new LocalHostGate();
             var expiredRecovery = new SharedWorldTransfer(expiredGate, client, storage, System::nanoTime, System::currentTimeMillis);
@@ -184,7 +201,7 @@ public final class LeaseServiceIntegrationProbe {
                 throw new AssertionError("Expired lease committed a pending snapshot");
             } catch (java.io.IOException expected) { }
             check(Files.exists(expiredJournal) && expiredGate.phase() == LocalHostGate.Phase.STOP_REQUIRED
-                    && client.snapshot("world").generation() == 3);
+                    && client.snapshot("world").generation() == 4);
             Files.delete(expiredJournal);
             try { third.renew(thirdAcquisition); throw new AssertionError("expired lease renewed"); }
             catch (java.io.IOException expected) { }
@@ -219,6 +236,10 @@ public final class LeaseServiceIntegrationProbe {
             Files.deleteIfExists(remote);
             Files.deleteIfExists(remote2);
             Files.deleteIfExists(directory.resolve("remote-3.zip"));
+            Files.deleteIfExists(directory.resolve("remote-4.zip"));
+            Files.deleteIfExists(directory.resolve("interrupted.zip"));
+            Files.deleteIfExists(directory.resolve("retry.zip"));
+            Files.deleteIfExists(directory.resolve("retry-journal"));
             Files.deleteIfExists(directory.resolve("not-yet-sent"));
             Files.deleteIfExists(directory.resolve("expired-pending"));
             Files.deleteIfExists(journal);
