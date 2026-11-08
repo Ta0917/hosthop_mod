@@ -18,6 +18,7 @@ public final class LocalHostGate {
     private long epoch;
     private long generation;
     private boolean snapshotVerified;
+    private boolean publicationUncertain;
 
     public synchronized Attempt beginAcquire() {
         if (phase != Phase.IDLE) throw new IllegalStateException("Prior host is not confirmed stopped");
@@ -112,14 +113,18 @@ public final class LocalHostGate {
 
     /** The remote commit must independently fence the lease and expected generation. */
     public synchronized boolean mayPublish(Attempt attempt, long nowNanos, long nowMillis) {
-        return attempt != null && attempt == current && phase == Phase.PUBLISHING && checkDeadline(nowNanos, nowMillis);
+        if (attempt == null || attempt != current || phase != Phase.PUBLISHING || !checkDeadline(nowNanos, nowMillis)) return false;
+        // Once a request may be sent, a lost response requires authoritative reconciliation.
+        publicationUncertain = true;
+        return true;
     }
 
     /** Caller must authenticate and match the acknowledgement to its operation. */
     public synchronized boolean publicationConfirmed(Attempt attempt, long committedGeneration, long nowNanos, long nowMillis) {
-        if (attempt == null || attempt != current || phase != Phase.PUBLISHING) return false;
+        if (attempt == null || attempt != current || phase != Phase.PUBLISHING || !publicationUncertain) return false;
         if (!checkDeadline(nowNanos, nowMillis) || generation == Long.MAX_VALUE || committedGeneration != generation + 1) return false;
         generation = committedGeneration;
+        publicationUncertain = false;
         pendingRenewal = null;
         phase = Phase.RELEASE_REQUIRED;
         return true;
@@ -139,9 +144,16 @@ public final class LocalHostGate {
         return true;
     }
 
-    /** Caller must stop the server and relay and reconcile any uncertain commit before confirming. */
+    /** Caller must reconcile the operation against authenticated authoritative records first. */
+    public synchronized boolean publicationReconciled(Attempt attempt) {
+        if (attempt == null || attempt != current || phase != Phase.STOP_REQUIRED || !publicationUncertain) return false;
+        publicationUncertain = false;
+        return true;
+    }
+
+    /** Caller must actually stop the server and relay before confirming. */
     public synchronized boolean confirmStopped(Attempt attempt) {
-        if (attempt == null || attempt != current || phase != Phase.STOP_REQUIRED) return false;
+        if (attempt == null || attempt != current || phase != Phase.STOP_REQUIRED || publicationUncertain) return false;
         clearAttempt();
         return true;
     }
@@ -151,6 +163,7 @@ public final class LocalHostGate {
         pendingRenewal = null;
         deadline = null;
         snapshotVerified = false;
+        publicationUncertain = false;
         phase = Phase.IDLE;
     }
 

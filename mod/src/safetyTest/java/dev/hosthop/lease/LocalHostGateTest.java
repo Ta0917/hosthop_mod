@@ -48,10 +48,15 @@ public final class LocalHostGateTest {
         check(gate.beginGracefulStop(attempt, 0, 0), "shutdown rejected");
         check(gate.serverStoppedForSnapshot(attempt, 0, 0), "stop rejected");
         check(gate.finalSnapshotVerified(attempt, 3, 0, 0), "snapshot rejected");
+        check(!gate.publicationConfirmed(attempt, 4, 0, 0), "unsent publication confirmed");
+        check(gate.mayPublish(attempt, 0, 0), "publication rejected");
         check(!gate.publicationConfirmed(attempt, 4, 27_000_000_000L, 27_000), "late acknowledgement accepted");
         check(gate.phase() == LocalHostGate.Phase.STOP_REQUIRED, "expiry did not require stop");
         check(!gate.mayPublish(attempt, 27_000_000_000L, 27_000), "expired publication allowed");
         expectAcquireFailure(gate);
+        check(!gate.confirmStopped(attempt), "uncertain publication bypassed reconciliation");
+        check(gate.publicationReconciled(attempt), "reconciliation rejected");
+        check(gate.confirmStopped(attempt), "reconciled stop rejected");
     }
 
     private static ConservativeLeaseDeadline deadline() {
