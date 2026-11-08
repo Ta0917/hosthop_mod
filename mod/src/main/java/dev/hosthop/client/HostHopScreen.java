@@ -20,12 +20,9 @@ import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Util;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.fml.loading.FMLPaths;
 
 /** Client entry point for registering an invitation and joining an active host. */
-@OnlyIn(Dist.CLIENT)
 public final class HostHopScreen extends Screen {
     private final Screen parent;
     private final AtomicLong request = new AtomicLong();
