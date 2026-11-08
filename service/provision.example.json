@@ -1,0 +1,8 @@
+{
+  "authority": "https://example.workers.dev",
+  "world": "shared_world",
+  "drive_folder": "replace_with_folder_id",
+  "oauth_client_id": "replace_with_google_oauth_client_id",
+  "oauth_client_secret": "replace_with_google_oauth_client_secret",
+  "members": ["host1", "host2"]
+}
