@@ -37,9 +37,10 @@ try {
   check(winners.length === 1, `expected one lease winner, got ${winners.length}`);
   const winner = candidates[winners[0]];
   const epoch = attempts[winners[0]].results[0].epoch;
+  check(attempts[winners[0]].results[0].expires - attempts[winners[0]].results[0].server_now === 120, 'grant clock interval incorrect');
   check((await db.prepare(acquire).bind('world', winner.owner, winner.lease, 120).all()).results.length === 0, 'retry created another lease');
   const originalGrant = await db.prepare(acquireStatus).bind('world', winner.lease).first();
-  check(originalGrant.owner === winner.owner && originalGrant.duration_seconds === 120 && originalGrant.epoch === epoch && originalGrant.active === 1, 'acquisition retry record invalid');
+  check(originalGrant.owner === winner.owner && originalGrant.duration_seconds === 120 && originalGrant.epoch === epoch && originalGrant.active === 1 && originalGrant.expires > originalGrant.server_now, 'acquisition retry record invalid');
   check((await db.prepare(renew).bind('world', winner.owner, 'wrong', epoch, 120).all()).results.length === 0, 'wrong lease renewed');
   check((await db.prepare(renew).bind('world', winner.owner, winner.lease, epoch, 120).all()).results.length === 1, 'valid lease failed renewal');
   const expiry = (await db.prepare('SELECT expires FROM worlds WHERE id=?1').bind('world').first()).expires;

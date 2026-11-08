@@ -8,4 +8,4 @@ FROM worlds WHERE id = ?1 AND expires <= unixepoch('now')
   AND typeof(?3) = 'text' AND length(?3) > 0
   AND typeof(?4) IN ('integer', 'real') AND ?4 = CAST(?4 AS INTEGER) AND ?4 BETWEEN 1 AND 300
 ON CONFLICT (world_id, lease_id) DO NOTHING
-RETURNING epoch, base_generation AS generation, initial_expires AS expires;
+RETURNING epoch, base_generation AS generation, initial_expires AS expires, unixepoch('now') AS server_now;
