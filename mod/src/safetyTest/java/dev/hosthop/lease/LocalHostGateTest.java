@@ -10,7 +10,52 @@ public final class LocalHostGateTest {
         expiredPublicationRequiresReconciliation();
         publicationJournalPreservesEvidence();
         recoveryBlocksNewHostUntilReceiptMatches();
+        preparationRecordsBeforeSendAndStopsOnFailure();
         System.out.println("LocalHostGate safety checks passed");
+    }
+
+    private static LocalHostGate.Attempt readyToPublish(LocalHostGate gate) {
+        var attempt = gate.beginAcquire();
+        check(gate.acceptGrant(attempt, 6, 11, deadline(), 0, 0), "grant rejected");
+        check(gate.snapshotVerified(attempt, 11, 0, 0), "initial snapshot rejected");
+        check(gate.beginHosting(attempt, 0, 0), "hosting rejected");
+        check(gate.beginGracefulStop(attempt, 0, 0), "shutdown rejected");
+        check(gate.serverStoppedForSnapshot(attempt, 0, 0), "stop rejected");
+        check(gate.finalSnapshotVerified(attempt, 11, 0, 0), "final snapshot rejected");
+        return attempt;
+    }
+
+    private static void preparationRecordsBeforeSendAndStopsOnFailure() throws Exception {
+        var directory = java.nio.file.Files.createTempDirectory("hosthop-prepare-test-");
+        var path = directory.resolve("pending");
+        try {
+            var operation = publication(6, 11, "op", "digest");
+            var gate = new LocalHostGate();
+            var attempt = readyToPublish(gate);
+            check(PublicationPreparation.prepare(gate, attempt, path, operation, () -> 0, () -> 0), "preparation failed");
+            check(operation.equals(PendingPublicationJournal.read(path)), "request not saved before send");
+            check(PublicationPreparation.prepare(gate, attempt, path, operation, () -> 0, () -> 0), "identical retry rejected");
+
+            var conflictingGate = new LocalHostGate();
+            var conflictingAttempt = readyToPublish(conflictingGate);
+            try {
+                PublicationPreparation.prepare(conflictingGate, conflictingAttempt, path, publication(6, 11, "other", "digest"), () -> 0, () -> 0);
+                throw new AssertionError("conflicting journal accepted");
+            } catch (java.io.IOException expected) { }
+            check(conflictingGate.phase() == LocalHostGate.Phase.STOP_REQUIRED, "journal conflict did not require stop");
+            check(operation.equals(PendingPublicationJournal.read(path)), "journal conflict changed evidence");
+
+            var expiryGate = new LocalHostGate();
+            var expiryAttempt = readyToPublish(expiryGate);
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            check(!PublicationPreparation.prepare(expiryGate, expiryAttempt, path, operation,
+                    () -> calls.getAndIncrement() == 0 ? 0 : 27_000_000_000L,
+                    () -> calls.get() <= 1 ? 0 : 27_000), "lease expiry during preparation was ignored");
+            check(expiryGate.phase() == LocalHostGate.Phase.STOP_REQUIRED, "expiry did not require stop");
+        } finally {
+            java.nio.file.Files.deleteIfExists(path);
+            java.nio.file.Files.delete(directory);
+        }
     }
 
     private static void recoveryBlocksNewHostUntilReceiptMatches() throws Exception {
