@@ -147,6 +147,7 @@ public final class HostHopScreen extends Screen {
                         return;
                     }
                     var server = new ServerData("HostHop " + invitation.world(), endpoint.address(), ServerData.Type.OTHER);
+                    GuestReconnect.track(invitation, authority, endpoint, this);
                     ConnectScreen.startConnecting(this, minecraft, ServerAddress.parseString(endpoint.address()), server, false, null);
                 });
             } catch (Exception failure) { finish(id, "screen.hosthop.join_failed"); }

@@ -12,6 +12,7 @@
   "screen.hosthop.snapshot_authorized": "最新データへのアクセスを許可しました",
   "screen.hosthop.snapshot_authorize_failed": "最新データを認証できませんでした",
   "screen.hosthop.join": "共有ワールドに参加",
+  "screen.hosthop.reconnecting": "ホストの再開を待っています…",
   "screen.hosthop.saving": "招待情報を安全に保存しています…",
   "screen.hosthop.registered": "招待情報を登録しました",
   "screen.hosthop.register_failed": "招待コードが無効か、別のワールドが登録済みです",

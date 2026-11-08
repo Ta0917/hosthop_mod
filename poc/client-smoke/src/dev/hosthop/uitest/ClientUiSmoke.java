@@ -31,6 +31,8 @@ public final class ClientUiSmoke {
         } else if (stage == 2) {
             stage = 3;
             if (!(minecraft.gui.screen() instanceof HostHopScreen)) throw new IllegalStateException("HostHop screen did not open");
+            try { dev.hosthop.client.ReconnectUiSmoke.verify(minecraft.gui.screen()); }
+            catch (Exception failure) { throw new IllegalStateException("Reconnect UI test failed", failure); }
             System.out.println("HOSTHOP_UI_SMOKE multiplayer entry and screen verified=true");
             minecraft.stop();
         }
