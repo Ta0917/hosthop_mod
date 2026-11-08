@@ -6,7 +6,9 @@ CREATE TABLE worlds (
     epoch INTEGER NOT NULL DEFAULT 0,
     expires INTEGER NOT NULL DEFAULT 0,
     generation INTEGER NOT NULL DEFAULT 0,
-    digest TEXT
+    digest TEXT,
+    endpoint TEXT,
+    endpoint_revision INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE lease_grants (
@@ -24,7 +26,8 @@ CREATE TABLE lease_grants (
 CREATE TRIGGER apply_lease_grant AFTER INSERT ON lease_grants
 BEGIN
     UPDATE worlds SET owner = NEW.owner, lease_id = NEW.lease_id,
-      epoch = NEW.epoch, expires = NEW.initial_expires
+      epoch = NEW.epoch, expires = NEW.initial_expires,
+      endpoint = NULL, endpoint_revision = endpoint_revision + 1
     WHERE id = NEW.world_id AND epoch = NEW.epoch - 1
       AND generation = NEW.base_generation AND expires <= unixepoch('now');
     SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'stale lease grant') END;
@@ -44,7 +47,8 @@ CREATE TABLE lease_releases (
 
 CREATE TRIGGER apply_lease_release AFTER INSERT ON lease_releases
 BEGIN
-    UPDATE worlds SET owner = NULL, lease_id = NULL, expires = 0
+    UPDATE worlds SET owner = NULL, lease_id = NULL, expires = 0,
+      endpoint = NULL, endpoint_revision = endpoint_revision + 1
     WHERE id = NEW.world_id AND owner = NEW.owner AND lease_id = NEW.lease_id
       AND epoch = NEW.epoch AND generation = NEW.result_generation
       AND EXISTS (SELECT 1 FROM committed_operations c WHERE c.world_id = NEW.world_id

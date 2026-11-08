@@ -17,6 +17,8 @@ const renew = load('renew.sql');
 const commit = load('commit.sql');
 const commitStatus = load('commit_status.sql');
 const release = load('release.sql');
+const endpointUpdate = load('endpoint_update.sql');
+const endpointStatus = load('endpoint_status.sql');
 const mf = new Miniflare(convertV4MiniflareOptions({
   modules: true,
   script: 'export default { fetch() { return new Response("local test"); } }',
@@ -120,6 +122,21 @@ try {
   check((await request('renew', { ...grantBody, epoch: grant.epoch + 1 })).status === 409, 'wrong epoch renewed');
   check((await request('acquire', { ...grantBody, duration: 301 })).status === 400, 'invalid duration accepted');
   check((await request('acquire', { ...grantBody, extra: 'x'.repeat(5000) })).status === 400, 'oversized body accepted');
+  const revision = (await db.prepare('SELECT endpoint_revision FROM worlds WHERE id=?1').bind('api-world').first()).endpoint_revision;
+  const publish = await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, revision, 'relay-one.example').first();
+  check(publish && publish.endpoint_revision === revision + 1, 'endpoint publication failed');
+  check((await db.prepare(endpointStatus).bind('api-world').first()).endpoint === 'relay-one.example', 'endpoint lookup failed');
+  const revoked = await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, publish.endpoint_revision, null).first();
+  check(revoked && !(await db.prepare(endpointStatus).bind('api-world').first()), 'revoked endpoint remained visible');
+  const replacement = await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, revoked.endpoint_revision, 'relay-two.example').first();
+  check(replacement, 'replacement endpoint publication failed');
+  check(!(await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, publish.endpoint_revision, null).first()), 'stale callback revoked replacement');
+  check(!(await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, revision, 'stale.example').first()), 'stale callback replaced endpoint');
+  await db.prepare("UPDATE worlds SET expires=unixepoch('now') WHERE id=?1").bind('api-world').run();
+  check(!(await db.prepare(endpointStatus).bind('api-world').first()), 'expired endpoint remained visible');
+  check(!(await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, replacement.endpoint_revision, 'stale.example').first()), 'expired owner published endpoint');
+  await db.prepare(acquire).bind('api-world', 'new-owner', 'new-lease', 120).first();
+  check(!(await db.prepare(endpointStatus).bind('api-world').first()), 'old endpoint leaked into new lease');
   console.log('PASS: Miniflare D1 bindings: leases, retries, renewals, commits, releases, concurrency, rollback');
 } finally {
   await mf.dispose();
