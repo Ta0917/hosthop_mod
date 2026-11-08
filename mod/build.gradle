@@ -53,6 +53,9 @@ if (project.hasProperty('hostStopProbe')) {
     sourceSets.main.java.srcDir('../poc/host-stop/src')
     sourceSets.main.resources.srcDir('../poc/host-stop/resources')
 }
+if (project.hasProperty('hosthopUiSmoke')) {
+    sourceSets.main.java.srcDir('../poc/client-smoke/src')
+}
 
 neoForge {
     // Specify the version of NeoForge to use.
@@ -66,6 +69,15 @@ neoForge {
     runs {
         client {
             client()
+            if (project.hasProperty('hosthopUiSmoke')) systemProperty 'hosthop.uiSmoke', 'true'
+            if (project.hasProperty('hosthopClientDir')) {
+                def root = file('../.tools').canonicalFile.toPath()
+                def target = file(project.property('hosthopClientDir')).canonicalFile.toPath()
+                if (!target.startsWith(root) || target == root || java.nio.file.Files.exists(target)) {
+                    throw new GradleException('Test client directory must be new and under .tools')
+                }
+                gameDirectory = target.toFile()
+            }
             // Comma-separated list of namespaces to load gametests from. Empty = all namespaces.
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         }
@@ -82,6 +94,14 @@ neoForge {
         gameTestServer {
             type = "gameTestServer"
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            if (project.hasProperty('hosthopTestUniverse')) {
+                def root = file('../.tools').canonicalFile.toPath()
+                def target = file(project.property('hosthopTestUniverse')).canonicalFile.toPath()
+                if (!target.startsWith(root) || target == root || java.nio.file.Files.exists(target)) {
+                    throw new GradleException('Test universe must be a new directory under .tools')
+                }
+                programArguments.addAll '--universe', target.toString()
+            }
             if (project.hasProperty('e4mcRelayProbe')) {
                 systemProperty 'hosthop.e4mcRelayProbe', 'true'
                 systemProperty 'hosthop.e4mcHoldSeconds', project.findProperty('e4mcHoldSeconds') ?: '0'
@@ -272,6 +292,11 @@ tasks.register('windowsSecretSafetyCheck', JavaExec) {
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.storage.WindowsSecretStoreTest'
 }
+tasks.register('invitationSafetyCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.config.InvitationTest'
+}
 tasks.register('snapshotRealWorldProbe', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath
@@ -301,7 +326,7 @@ tasks.register('leaseServiceIntegrationProbe', JavaExec) {
     systemProperty 'hosthop.bridge', file('../poc/d1/local_https_bridge.mjs').absolutePath
     systemProperty 'hosthop.miniflare', file('../.tools/d1-tool/node_modules/miniflare').absolutePath
 }
-tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck') }
+tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck'), tasks.named('invitationSafetyCheck') }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {

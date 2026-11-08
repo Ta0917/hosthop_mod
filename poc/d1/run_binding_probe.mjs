@@ -135,12 +135,12 @@ try {
   check(revisionResponse.status === 200, 'owner could not retrieve endpoint revision');
   const revision = (await revisionResponse.json()).endpoint_revision;
   check((await request('endpoint-update', { ...grantBody, epoch: grant.epoch, revision, endpoint: 'unsafe.example' })).status === 400, 'untrusted endpoint accepted');
-  const publishResponse = await request('endpoint-update', { ...grantBody, epoch: grant.epoch, revision, endpoint: 'relay-one.e4mc.link' });
+  const publishResponse = await request('endpoint-update', { ...grantBody, epoch: grant.epoch, revision, endpoint: 'relay-one.us.e4mc.link' });
   check(publishResponse.status === 200, 'authenticated endpoint publication failed');
   const publish = await publishResponse.json();
   check(publish && publish.endpoint_revision === revision + 1, 'endpoint publication failed');
   const statusResponse = await request('endpoint-status', { world: 'api-world' });
-  check(statusResponse.status === 200 && (await statusResponse.json()).endpoint === 'relay-one.e4mc.link', 'endpoint lookup failed');
+  check(statusResponse.status === 200 && (await statusResponse.json()).endpoint === 'relay-one.us.e4mc.link', 'endpoint lookup failed');
   check((await request('endpoint-status', { world: 'api-world' }, 'b'.repeat(43))).status === 401, 'unauthenticated endpoint lookup succeeded');
   const otherToken = 'c'.repeat(43);
   const otherHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(otherToken))), b => b.toString(16).padStart(2, '0')).join('');

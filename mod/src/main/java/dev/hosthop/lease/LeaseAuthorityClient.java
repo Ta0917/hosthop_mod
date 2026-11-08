@@ -4,6 +4,7 @@ import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import com.google.gson.JsonObject;
 import dev.hosthop.storage.GoogleDriveSnapshotStore;
+import dev.hosthop.relay.RelayAddress;
 import java.io.IOException;
 import java.io.ByteArrayOutputStream;
 import java.io.StringReader;
@@ -41,6 +42,7 @@ public final class LeaseAuthorityClient {
     public record Endpoint(String world, long epoch, long generation, long revision, String address,
                            ConservativeLeaseDeadline deadline) {}
     public record Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object) {}
+    public record EndpointLease(long epoch, long revision, String address, ConservativeLeaseDeadline deadline) {}
     @FunctionalInterface public interface Exchange { Reply send(HttpRequest request) throws IOException, InterruptedException; }
 
     public LeaseAuthorityClient(URI base, String token) {
@@ -94,8 +96,7 @@ public final class LeaseAuthorityClient {
         long serverNow = required(fields.numbers(), "server_now");
         long expires = required(fields.numbers(), "expires");
         String address = fields.strings().get("endpoint");
-        if (epoch < 1 || generation < 0 || revision < 0 || serverNow < 0 || address == null
-                || !address.matches("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.e4mc\\.link"))
+        if (epoch < 1 || generation < 0 || revision < 0 || serverNow < 0 || !RelayAddress.valid(address))
             throw new IOException("Invalid endpoint response");
         try {
             var deadline = ConservativeLeaseDeadline.fromGrant(startNanos, startMillis, serverNow, expires, marginSeconds);
@@ -104,6 +105,44 @@ public final class LeaseAuthorityClient {
         } catch (IllegalArgumentException | ArithmeticException invalid) {
             throw new IOException("Invalid endpoint response", invalid);
         }
+    }
+
+    public EndpointLease endpointRevision(String world, String lease, long epoch, long marginSeconds) throws IOException, InterruptedException {
+        return endpointUpdate("endpoint-revision", world, lease, epoch, -1, null, marginSeconds);
+    }
+
+    /** A null address revokes publication; expectedRevision fences delayed callbacks. */
+    public EndpointLease updateEndpoint(String world, String lease, long epoch, long expectedRevision, String address, long marginSeconds)
+            throws IOException, InterruptedException {
+        if (expectedRevision < 0 || (address != null && !RelayAddress.valid(address)))
+            throw new IllegalArgumentException("Invalid endpoint update");
+        return endpointUpdate("endpoint-update", world, lease, epoch, expectedRevision, address, marginSeconds);
+    }
+
+    private EndpointLease endpointUpdate(String route, String world, String lease, long epoch, long revision, String address, long margin)
+            throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID) || lease == null || !lease.matches(ID) || epoch < 1)
+            throw new IllegalArgumentException("Invalid lease");
+        var body = new JsonObject();
+        body.addProperty("world", world); body.addProperty("lease", lease); body.addProperty("epoch", epoch);
+        if (revision >= 0) {
+            body.addProperty("revision", revision);
+            if (address == null) body.add("endpoint", com.google.gson.JsonNull.INSTANCE); else body.addProperty("endpoint", address);
+        }
+        long startNanos = nanos.getAsLong(), startMillis = millis.getAsLong();
+        var fields = post(route, body);
+        long returnedEpoch = required(fields.numbers(), "epoch"), returnedRevision = required(fields.numbers(), "endpoint_revision");
+        long now = required(fields.numbers(), "server_now"), expiry = required(fields.numbers(), "expires");
+        String returnedAddress = fields.strings().get("endpoint");
+        if (returnedEpoch != epoch || returnedRevision < 0 || now < 0
+                || (revision >= 0 && (returnedRevision != revision + 1 || !java.util.Objects.equals(returnedAddress, address)))
+                || (returnedAddress != null && !RelayAddress.valid(returnedAddress)))
+            throw new IOException("Invalid endpoint update receipt");
+        try {
+            var deadline = ConservativeLeaseDeadline.fromGrant(startNanos, startMillis, now, expiry, margin);
+            if (!deadline.isUsable(nanos.getAsLong(), millis.getAsLong())) throw new IOException("Endpoint update expired");
+            return new EndpointLease(epoch, returnedRevision, returnedAddress, deadline);
+        } catch (IllegalArgumentException | ArithmeticException invalid) { throw new IOException("Invalid endpoint update receipt", invalid); }
     }
 
     public Snapshot snapshot(String world) throws IOException, InterruptedException {
@@ -243,6 +282,7 @@ public final class LeaseAuthorityClient {
                     if (!value.matches("-?(0|[1-9][0-9]*)")) throw new IOException("Invalid response number");
                     values.put(name, Long.parseLong(value));
                 } else if (java.util.Set.of("owner", "endpoint", "world_id", "operation_id", "lease_id", "digest", "object_id").contains(name)) {
+                    if (name.equals("endpoint") && reader.peek() == JsonToken.NULL) { reader.nextNull(); continue; }
                     if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid response text");
                     strings.put(name, reader.nextString());
                 } else reader.skipValue();

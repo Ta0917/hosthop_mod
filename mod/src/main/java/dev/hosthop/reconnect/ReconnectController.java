@@ -1,6 +1,7 @@
 package dev.hosthop.reconnect;
 
 import dev.hosthop.lease.LeaseAuthorityClient;
+import dev.hosthop.relay.RelayAddress;
 
 /**
  * Retry policy only. Does not authenticate endpoints, connect Minecraft, observe
@@ -41,8 +42,7 @@ public final class ReconnectController {
     public synchronized Attempt connect(Session session, LeaseAuthorityClient.Endpoint destination, long nowNanos, long nowMillis) {
         if (session == null || session != this.session || state != State.WAITING || !timeValid(nowNanos)) return null;
         if (nowNanos - nextTime < 0 || destination == null || !world.equals(destination.world())
-                || destination.epoch() < lastEpoch || destination.address() == null
-                || destination.address().isBlank() || destination.address().length() > 255 || destination.deadline() == null
+                || destination.epoch() < lastEpoch || !RelayAddress.valid(destination.address()) || destination.deadline() == null
                 || !destination.deadline().isUsable(nowNanos, nowMillis)) return null;
         lastEpoch = destination.epoch();
         attempts++;

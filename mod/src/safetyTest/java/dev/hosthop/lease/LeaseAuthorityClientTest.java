@@ -13,7 +13,7 @@ public final class LeaseAuthorityClientTest {
                 "{\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         var client = new LeaseAuthorityClient(URI.create("https://authority.example/"), "a".repeat(43),
                 request -> {
-                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status", "/commit", "/commit-status", "/snapshot-status", "/release", "/release-status").contains(request.uri().getPath()));
+                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status", "/endpoint-revision", "/endpoint-update", "/commit", "/commit-status", "/snapshot-status", "/release", "/release-status").contains(request.uri().getPath()));
                     check(request.headers().firstValue("Authorization").orElseThrow().equals("Bearer " + "a".repeat(43)));
                     return reply.get();
                 }, nanos::get, millis::get);
@@ -27,11 +27,18 @@ public final class LeaseAuthorityClientTest {
         expectFailure(() -> client.lookupAcquisition("world", "lease", 29, "owner", 2));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"owner\":\"owner\",\"epoch\":4,\"base_generation\":3,\"duration_seconds\":30,\"active\":0,\"server_now\":100,\"expires\":130}"));
         expectFailure(() -> client.lookupAcquisition("world", "lease", 30, "owner", 2));
-        reply.set(new LeaseAuthorityClient.Reply(200, "{\"endpoint\":\"example.e4mc.link\",\"endpoint_revision\":7,\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"endpoint\":\"example.us.e4mc.link\",\"endpoint_revision\":7,\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         var endpoint = client.endpoint("world", 2);
-        check(endpoint.epoch() == 4 && endpoint.revision() == 7 && endpoint.address().equals("example.e4mc.link"));
+        check(endpoint.epoch() == 4 && endpoint.revision() == 7 && endpoint.address().equals("example.us.e4mc.link"));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"endpoint\":\"example.evil.invalid\",\"endpoint_revision\":7,\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         expectFailure(() -> client.endpoint("world", 2));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"endpoint_revision\":7,\"endpoint\":null,\"server_now\":100,\"expires\":130}"));
+        check(client.endpointRevision("world", "lease", 4, 2).revision() == 7);
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"endpoint_revision\":8,\"endpoint\":\"example.e4mc.link\",\"server_now\":100,\"expires\":130}"));
+        check(client.updateEndpoint("world", "lease", 4, 7, "example.e4mc.link", 2).revision() == 8);
+        expectFailure(() -> client.updateEndpoint("world", "lease", 4, 6, "example.e4mc.link", 2));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"endpoint_revision\":9,\"endpoint\":null,\"server_now\":100,\"expires\":130}"));
+        check(client.updateEndpoint("world", "lease", 4, 8, null, 2).address() == null);
         String digest = "a".repeat(64);
         var publication = new PublicationRecord("world", "op", "owner", "lease", 4, 3, digest, "file-id", 42, 4);
         String receipt = "{\"world_id\":\"world\",\"operation_id\":\"op\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"previous_generation\":3,\"digest\":\"" + digest + "\",\"object_id\":\"file-id\",\"object_size\":42,\"result_generation\":4}";

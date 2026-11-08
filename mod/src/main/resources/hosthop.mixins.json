@@ -1,0 +1,8 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "dev.hosthop.relay.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["E4mcSessionMixin", "E4mcAssignmentMixin", "E4mcInactiveMixin"],
+  "injectors": { "defaultRequire": 0 }
+}

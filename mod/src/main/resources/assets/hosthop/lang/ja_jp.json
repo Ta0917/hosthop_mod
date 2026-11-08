@@ -1,0 +1,15 @@
+{
+  "screen.hosthop.title": "共有ワールド",
+  "screen.hosthop.initial": "起動中の共有ワールドに参加します",
+  "screen.hosthop.register": "クリップボードの招待コードを登録",
+  "screen.hosthop.authorize": "Google Driveを連携",
+  "screen.hosthop.authorizing": "ブラウザーで認証を完了してください",
+  "screen.hosthop.authorized": "Google Driveを連携しました",
+  "screen.hosthop.authorize_failed": "Google Driveの認証を完了できませんでした",
+  "screen.hosthop.join": "共有ワールドに参加",
+  "screen.hosthop.saving": "招待情報を安全に保存しています…",
+  "screen.hosthop.registered": "招待情報を登録しました",
+  "screen.hosthop.register_failed": "招待コードが無効か、別のワールドが登録済みです",
+  "screen.hosthop.connecting": "現在のホストを探しています…",
+  "screen.hosthop.join_failed": "現在のホストを確認できませんでした"
+}

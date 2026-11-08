@@ -60,8 +60,8 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
           && (!Number.isSafeInteger(body.epoch) || body.epoch < 1))
         return json({ error: 'invalid request' }, 400);
       if (route === '/endpoint-update' && (!Number.isSafeInteger(body.revision) || body.revision < 0
-          || (body.endpoint !== null && (typeof body.endpoint !== 'string'
-              || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.e4mc\.link$/.test(body.endpoint)))))
+          || (body.endpoint !== null && (typeof body.endpoint !== 'string' || body.endpoint.length > 253
+              || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.e4mc\.link$/.test(body.endpoint)))))
         return json({ error: 'invalid request' }, 400);
       if (['/commit', '/commit-status'].includes(route) && (!identifier(body.operation) || !Number.isSafeInteger(body.previousGeneration)
           || body.previousGeneration < 0 || typeof body.digest !== 'string' || !/^[0-9a-f]{64}$/.test(body.digest)

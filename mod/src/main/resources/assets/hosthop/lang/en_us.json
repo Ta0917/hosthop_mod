@@ -1,0 +1,15 @@
+{
+  "screen.hosthop.title": "Shared World",
+  "screen.hosthop.initial": "Join an active shared-world host",
+  "screen.hosthop.register": "Register invitation from clipboard",
+  "screen.hosthop.authorize": "Authorize Google Drive",
+  "screen.hosthop.authorizing": "Finish authorization in your browser",
+  "screen.hosthop.authorized": "Google Drive authorized",
+  "screen.hosthop.authorize_failed": "Drive authorization did not complete",
+  "screen.hosthop.join": "Join shared world",
+  "screen.hosthop.saving": "Saving invitation securely...",
+  "screen.hosthop.registered": "Invitation registered",
+  "screen.hosthop.register_failed": "Invitation invalid or another world is already registered",
+  "screen.hosthop.connecting": "Looking for the current host...",
+  "screen.hosthop.join_failed": "Could not find or reach a current host"
+}

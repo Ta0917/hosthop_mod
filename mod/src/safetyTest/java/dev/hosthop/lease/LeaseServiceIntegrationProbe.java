@@ -1,6 +1,5 @@
 package dev.hosthop.lease;
 
-import com.google.gson.JsonParser;
 import dev.hosthop.reconnect.ReconnectController;
 import dev.hosthop.snapshot.SnapshotVerifier;
 import dev.hosthop.storage.GoogleDriveSnapshotStore;
@@ -95,9 +94,8 @@ public final class LeaseServiceIntegrationProbe {
             transfer.prepare(acquisition, initial, archiveA, preparedA, "drive-test-token");
             check(gate.beginHosting(acquisition.attempt(), System.nanoTime(), System.currentTimeMillis()));
             check(coordinator.renew(acquisition));
-            var revision = post(http, base, "/endpoint-revision", "{\"world\":\"world\",\"lease\":\"lease\",\"epoch\":1}");
-            long number = JsonParser.parseString(revision).getAsJsonObject().get("endpoint_revision").getAsLong();
-            post(http, base, "/endpoint-update", "{\"world\":\"world\",\"lease\":\"lease\",\"epoch\":1,\"revision\":" + number + ",\"endpoint\":\"test.e4mc.link\"}");
+            long number = client.endpointRevision("world", "lease", 1, 2).revision();
+            client.updateEndpoint("world", "lease", 1, number, "test.e4mc.link", 2);
             var endpoint = client.endpoint("world", 2);
             var reconnect = new ReconnectController();
             var session = reconnect.start("world", 1, System.nanoTime());

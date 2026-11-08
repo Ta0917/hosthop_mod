@@ -10,6 +10,7 @@ import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
+import dev.hosthop.relay.E4mcRelayBridge;
 
 /** Opt-in experiment: creates an empty, temporary public e4mc tunnel. */
 @EventBusSubscriber(modid = "hosthop")
@@ -17,6 +18,13 @@ public final class E4mcRelayProbe {
     public static volatile boolean finished;
     public static volatile Throwable failure;
     private static int localPort;
+    private static volatile String productionAddress;
+    private static final E4mcRelayBridge.Listener productionListener = new E4mcRelayBridge.Listener() {
+        private Object current;
+        @Override public void opened(Object token) { current = token; productionAddress = null; }
+        @Override public void assigned(Object token, String address) { if (token == current) productionAddress = address; }
+        @Override public void closed(Object token) { if (token == current) { current = null; productionAddress = null; } }
+    };
 
     @SubscribeEvent
     public static void onStarted(ServerStartedEvent event) throws Exception {
@@ -24,6 +32,7 @@ public final class E4mcRelayProbe {
         if (!Boolean.getBoolean("hosthop.e4mcRelayProbe") ||
                 !server.getClass().getName().equals("net.minecraft.gametest.framework.GameTestServer")) return;
         System.out.println("HOSTHOP_PROBE starting loopback listener for empty test world");
+        E4mcRelayBridge.install(productionListener);
         boolean localOnly = Boolean.getBoolean("hosthop.e4mcLocalOnly");
         if (localOnly) {
             try (ServerSocket reserved = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
@@ -59,6 +68,8 @@ public final class E4mcRelayProbe {
             System.out.println("HOSTHOP_PROBE final session state=" + state);
             System.out.println("HOSTHOP_PROBE assignment captured=" + (CapturedEndpoint.address() != null));
             if (!state.equals("STARTED") || CapturedEndpoint.address() == null) throw new IllegalStateException("Relay or assignment capture failed");
+            if (!CapturedEndpoint.address().equals(productionAddress)) throw new IllegalStateException("Production relay bridge did not capture assignment");
+            System.out.println("HOSTHOP_PROBE production relay bridge verified=true");
             waitForStatus(server);
             int protocol = SharedConstants.getCurrentVersion().protocolVersion();
             ping(CapturedEndpoint.address(), 25565, protocol);
@@ -158,6 +169,7 @@ public final class E4mcRelayProbe {
                 }
             }
             finished = true;
+            E4mcRelayBridge.uninstall(productionListener);
         }
     }
 

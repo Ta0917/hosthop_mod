@@ -14,6 +14,9 @@ public final class DriveCredentialManager {
     private final GoogleDriveAuthorization authorization;
     private GoogleDriveAuthorization.Tokens cached;
     private long usableUntil;
+    private final java.util.concurrent.atomic.AtomicBoolean authorizing = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicLong authorizationGeneration = new java.util.concurrent.atomic.AtomicLong();
+    private volatile GoogleDriveAuthorization.Session activeSession;
 
     public DriveCredentialManager(WindowsSecretStore vault, GoogleDriveAuthorization authorization) {
         if (vault == null || authorization == null) throw new IllegalArgumentException("Missing credential dependency");
@@ -21,15 +24,27 @@ public final class DriveCredentialManager {
     }
 
     /** The caller supplies the browser opener as a result of an explicit user action. */
-    public synchronized void authorize(String expectedFolder, Consumer<URI> openBrowser) throws IOException, InterruptedException {
+    public void authorize(String expectedFolder, Consumer<URI> openBrowser) throws IOException, InterruptedException {
         if (openBrowser == null) throw new IllegalArgumentException("Missing browser opener");
+        if (!authorizing.compareAndSet(false, true)) throw new IOException("Drive authorization already in progress");
+        long generation = authorizationGeneration.get();
         try (var session = authorization.begin(expectedFolder)) {
+            activeSession = session;
+            if (generation != authorizationGeneration.get()) throw new IOException("Drive authorization cancelled");
             openBrowser.accept(session.authorizationUri());
             var tokens = session.await(Duration.ofMinutes(5));
             if (tokens.refreshToken() == null) throw new IOException("Google did not provide a refresh token");
-            save(tokens);
-            cache(tokens);
+            synchronized (this) { save(tokens); cache(tokens); }
+        } finally {
+            activeSession = null;
+            authorizing.set(false);
         }
+    }
+
+    public void cancelAuthorization() {
+        authorizationGeneration.incrementAndGet();
+        var session = activeSession;
+        if (session != null) session.close();
     }
 
     /** Refreshes credentials if needed; never opens a browser automatically. */
