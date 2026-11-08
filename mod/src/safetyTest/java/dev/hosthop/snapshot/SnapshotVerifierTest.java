@@ -11,6 +11,11 @@ import java.util.zip.ZipOutputStream;
 
 public final class SnapshotVerifierTest {
     public static void main(String[] args) throws Exception {
+        if (args.length == 3 && args[0].equals("--create")) {
+            var result = SnapshotWriter.create(Path.of(args[1]), Path.of(args[2]));
+            System.out.println("Snapshot created: " + result.files() + " files, " + result.uncompressedBytes() + " bytes");
+            return;
+        }
         if (args.length == 2) {
             var result = SnapshotVerifier.restore(Path.of(args[0]), Path.of(args[1]));
             System.out.println("Snapshot restored: " + result.files() + " files, " + result.uncompressedBytes() + " bytes");
@@ -61,12 +66,43 @@ public final class SnapshotVerifierTest {
                 zip.closeArchiveEntry();
             }
             fails(file);
+            writerRoundTrip(directory);
             System.out.println("SnapshotVerifier safety checks passed");
         } finally {
             Files.deleteIfExists(restored.resolve("level.dat"));
             Files.deleteIfExists(restored);
             Files.deleteIfExists(file);
             Files.delete(directory);
+        }
+    }
+
+    private static void writerRoundTrip(Path directory) throws Exception {
+        Path world = directory.resolve("writer-world");
+        Path nested = world.resolve("dimension");
+        Path archive = directory.resolve("writer.zip");
+        Path restore = directory.resolve("writer-restore");
+        Files.createDirectory(world);
+        Files.createDirectory(nested);
+        Files.writeString(world.resolve("level.dat"), "settings");
+        Files.writeString(nested.resolve("data.dat"), "content");
+        try {
+            check(SnapshotWriter.create(world, archive).files() == 2);
+            check(SnapshotVerifier.restore(archive, restore).files() == 2);
+            check(Files.readString(restore.resolve("dimension/data.dat")).equals("content"));
+            try { SnapshotWriter.create(world, archive); throw new AssertionError("backup overwritten"); }
+            catch (java.nio.file.FileAlreadyExistsException expected) { }
+            try { SnapshotWriter.create(world, world.resolve("nested.zip")); throw new AssertionError("backup inside world"); }
+            catch (IOException expected) { }
+        } finally {
+            Files.deleteIfExists(restore.resolve("dimension/data.dat"));
+            Files.deleteIfExists(restore.resolve("dimension"));
+            Files.deleteIfExists(restore.resolve("level.dat"));
+            Files.deleteIfExists(restore);
+            Files.deleteIfExists(archive);
+            Files.deleteIfExists(nested.resolve("data.dat"));
+            Files.deleteIfExists(nested);
+            Files.deleteIfExists(world.resolve("level.dat"));
+            Files.deleteIfExists(world);
         }
     }
 

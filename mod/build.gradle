@@ -269,6 +269,12 @@ tasks.register('snapshotRestoreRealWorldProbe', JavaExec) {
     mainClass = 'dev.hosthop.snapshot.SnapshotVerifierTest'
     args file('../test-data/offline-backup-poc.zip').absolutePath, file('../.tools/snapshot-java-restore').absolutePath
 }
+tasks.register('snapshotCreateRealWorldProbe', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.snapshot.SnapshotVerifierTest'
+    args '--create', file('../test-data/dqm-copy').absolutePath, file('../.tools/snapshot-java-created.zip').absolutePath
+}
 // Optional integration check requires the local Miniflare tools installed under .tools.
 tasks.register('leaseServiceIntegrationProbe', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')

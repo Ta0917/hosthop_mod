@@ -26,9 +26,9 @@ import org.apache.commons.compress.archivers.zip.ZipFile;
 /** Verifies offline backup format 1. It does not make a live-world snapshot. */
 public final class SnapshotVerifier {
     private static final String MANIFEST = "hosthop-manifest.json";
-    private static final long MAX_MANIFEST = 16L * 1024 * 1024;
-    private static final long MAX_TOTAL = 64L * 1024 * 1024 * 1024;
-    private static final int MAX_FILES = 500_000;
+    static final long MAX_MANIFEST = 16L * 1024 * 1024;
+    static final long MAX_TOTAL = 64L * 1024 * 1024 * 1024;
+    static final int MAX_FILES = 500_000;
     private static final Set<String> RESERVED = Set.of("CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9");
 
     private SnapshotVerifier() {}
@@ -191,9 +191,9 @@ public final class SnapshotVerifier {
         return Long.parseLong(value);
     }
 
-    private static String folded(String path) { return path.toUpperCase(Locale.ROOT).toLowerCase(Locale.ROOT); }
+    static String folded(String path) { return path.toUpperCase(Locale.ROOT).toLowerCase(Locale.ROOT); }
 
-    private static boolean validPath(String path) {
+    static boolean validPath(String path) {
         if (path.isEmpty() || path.chars().anyMatch(c -> Character.isISOControl(c) || "\\:*?\"<>|".indexOf(c) >= 0)) return false;
         for (String part : path.split("/", -1)) {
             if (part.isEmpty() || part.equals(".") || part.equals("..") || part.endsWith(" ") || part.endsWith(".")) return false;
