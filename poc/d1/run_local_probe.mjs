@@ -44,6 +44,8 @@ run(['--command', "INSERT INTO worlds (id, owner, lease_id, epoch, expires) VALU
 const leases = run(['--command', `${leaseStatement(acquire, 'lease-1')}\n${leaseStatement(acquire, 'lease-2')}\n${leaseStatement(renew, 'wrong')}\n${leaseStatement(renew, 'lease-1')}`]);
 check(leases[0].results[0].epoch === 1 && leases[1].results.length === 0, 'concurrent lease was not excluded');
 check(leases[2].results.length === 0 && leases[3].results[0].epoch === 1, 'lease renewal fence failed');
+run(['--command', "UPDATE worlds SET expires=unixepoch('now') WHERE id='lease-world'"]);
+check(run(['--command', leaseStatement(acquire, 'lease-2')])[0].results.length === 0, 'expiry alone allowed takeover');
 const repeated = run(['--command', `${commit('op-1', 0, 'first')}\n${commit('op-1', 0, 'first')}\nSELECT generation,digest,(SELECT count(*) FROM committed_operations) AS operations FROM worlds WHERE id='test-world';`]);
 check(repeated[0].results[0].result_generation === 1 && repeated[1].results.length === 0, 'repeat changed generation');
 check(repeated[2].results[0].generation === 1 && repeated[2].results[0].operations === 1, 'wrong committed state');

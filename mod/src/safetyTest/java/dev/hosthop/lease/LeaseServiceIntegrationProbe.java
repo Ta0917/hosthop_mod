@@ -63,6 +63,18 @@ public final class LeaseServiceIntegrationProbe {
             var reconnect = new ReconnectController();
             var session = reconnect.start("world", 1, System.nanoTime());
             check(reconnect.connect(session, endpoint, System.nanoTime(), System.currentTimeMillis()) != null);
+            post(http, base, "/test-expire", "{}");
+            try { coordinator.renew(acquisition); throw new AssertionError("expired lease renewed"); }
+            catch (java.io.IOException expected) { }
+            check(gate.phase() == LocalHostGate.Phase.STOP_REQUIRED);
+            var otherGate = new LocalHostGate();
+            var other = new LeaseCoordinator(otherGate, client, System::nanoTime, System::currentTimeMillis);
+            var replacement = other.begin("world", "new-lease", "owner", 30, 2);
+            try { other.acquire(replacement); throw new AssertionError("expiry allowed takeover"); }
+            catch (java.io.IOException expected) { }
+            check(otherGate.phase() == LocalHostGate.Phase.ACQUIRING);
+            try { client.endpoint("world", 2); throw new AssertionError("expired endpoint returned"); }
+            catch (java.io.IOException expected) { }
             System.out.println("PASS: Java HTTPS client to local workerd and D1");
         } finally {
             if (bridge != null) {

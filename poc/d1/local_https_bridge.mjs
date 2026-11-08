@@ -32,6 +32,12 @@ const server = https.createServer({ pfx: readFileSync(process.argv[3]), passphra
   try {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
+    if (req.url === '/test-expire') {
+      await db.prepare("UPDATE worlds SET expires=unixepoch('now') WHERE id=?1").bind('world').run();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+      return;
+    }
     const response = await mf.dispatchFetch(`http://localhost${req.url}`, {
       method: req.method, headers: req.headers, body: Buffer.concat(chunks),
     });

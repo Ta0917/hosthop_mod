@@ -28,7 +28,7 @@ BEGIN
     UPDATE worlds SET owner = NEW.owner, lease_id = NEW.lease_id,
       epoch = NEW.epoch, expires = NEW.initial_expires,
       endpoint = NULL, endpoint_revision = endpoint_revision + 1
-    WHERE id = NEW.world_id AND epoch = NEW.epoch - 1
+    WHERE id = NEW.world_id AND owner IS NULL AND lease_id IS NULL AND epoch = NEW.epoch - 1
       AND generation = NEW.base_generation AND expires <= unixepoch('now');
     SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'stale lease grant') END;
 END;

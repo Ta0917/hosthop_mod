@@ -13,6 +13,7 @@ COMMIT = (Path(__file__).parent / "d1" / "commit.sql").read_text(encoding="utf-8
 ACQUIRE = (Path(__file__).parent / "d1" / "acquire.sql").read_text(encoding="utf-8")
 ACQUIRE_STATUS = (Path(__file__).parent / "d1" / "acquire_status.sql").read_text(encoding="utf-8")
 RENEW = (Path(__file__).parent / "d1" / "renew.sql").read_text(encoding="utf-8")
+RELEASE = (Path(__file__).parent / "d1" / "release.sql").read_text(encoding="utf-8")
 
 
 class D1SqlTest(unittest.TestCase):
@@ -93,7 +94,7 @@ class D1SqlTest(unittest.TestCase):
 
     def test_acquisition_retry_does_not_reacquire_an_expired_grant(self):
         with lease_model.connection(self.db) as c:
-            c.execute("UPDATE worlds SET expires=0 WHERE id='w'")
+            c.execute("UPDATE worlds SET owner=NULL, lease_id=NULL, expires=0 WHERE id='w'")
             request = ("w", "host", "unique-lease", 30)
             first = c.execute(ACQUIRE, request).fetchone()
             self.assertEqual(2, first[0])
@@ -106,22 +107,26 @@ class D1SqlTest(unittest.TestCase):
             c.execute("UPDATE worlds SET expires=unixepoch('now') WHERE id='w'")
             self.assertIsNone(c.execute(ACQUIRE, request).fetchone())
             self.assertEqual(0, c.execute(ACQUIRE_STATUS, ("w", "unique-lease")).fetchone()[5])
-            self.assertEqual(3, c.execute(ACQUIRE, ("w", "host", "fresh-lease", 30)).fetchone()[0])
+            self.assertIsNone(c.execute(ACQUIRE, ("w", "host", "fresh-lease", 30)).fetchone())
             self.assertEqual(0, c.execute(ACQUIRE_STATUS, ("w", "unique-lease")).fetchone()[5])
+            with self.assertRaises(sqlite3.IntegrityError):
+                c.execute("INSERT INTO lease_grants VALUES (?, ?, ?, ?, ?, ?, ?)",
+                          ("w", "forged", "host", 3, 0, int(time.time()) + 30, 30))
 
     def test_old_host_cannot_renew_or_commit_after_takeover(self):
+        self.assertEqual(1, self.attempt("final-op"))
         with lease_model.connection(self.db) as c:
-            c.execute("UPDATE worlds SET expires=0 WHERE id='w'")
+            self.assertIsNotNone(c.execute(RELEASE, ("w", "a", "lease-a", 1, "final-op", 1)).fetchone())
             new_lease = c.execute(ACQUIRE, ("w", "host-b", "lease-b", 30)).fetchone()
             self.assertEqual(2, new_lease[0])
             self.assertIsNone(c.execute(RENEW, ("w", "a", "lease-a", 1, 30)).fetchone())
         self.assertIsNone(self.attempt("stale-operation", owner="a", lease_id="lease-a", epoch=1))
         with lease_model.connection(self.db) as c:
-            self.assertEqual(("host-b", "lease-b", 2, 0), c.execute("SELECT owner,lease_id,epoch,generation FROM worlds WHERE id='w'").fetchone())
+            self.assertEqual(("host-b", "lease-b", 2, 1), c.execute("SELECT owner,lease_id,epoch,generation FROM worlds WHERE id='w'").fetchone())
 
     def test_acquisition_update_failure_rolls_back_grant(self):
         with lease_model.connection(self.db) as c:
-            c.execute("UPDATE worlds SET expires=0 WHERE id='w'")
+            c.execute("UPDATE worlds SET owner=NULL, lease_id=NULL, expires=0 WHERE id='w'")
             c.execute("CREATE TRIGGER reject_lease BEFORE UPDATE ON worlds BEGIN SELECT RAISE(ABORT, 'injected lease failure'); END")
         with self.assertRaises(sqlite3.IntegrityError):
             with lease_model.connection(self.db) as c:
@@ -132,7 +137,7 @@ class D1SqlTest(unittest.TestCase):
 
     def test_acquire_rejects_empty_ids_and_invalid_durations(self):
         with lease_model.connection(self.db) as c:
-            c.execute("UPDATE worlds SET expires=0 WHERE id='w'")
+            c.execute("UPDATE worlds SET owner=NULL, lease_id=NULL, expires=0 WHERE id='w'")
             for owner, lease, seconds in (("", "l", 30), ("a", "", 30), ("a", "l", 0), ("a", "l", 301), ("a", "l", 1.5)):
                 self.assertIsNone(c.execute(ACQUIRE, ("w", owner, lease, seconds)).fetchone())
             self.assertEqual(1, c.execute("SELECT epoch FROM worlds WHERE id='w'").fetchone()[0])

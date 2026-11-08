@@ -79,6 +79,9 @@ try {
   await db.prepare("UPDATE worlds SET expires=unixepoch('now') WHERE id=?1").bind('world').run();
   check((await db.prepare(acquire).bind('world', winner.owner, winner.lease, 120).all()).results.length === 0, 'expired grant was reused');
   check((await db.prepare(acquireStatus).bind('world', winner.lease).first()).active === 0, 'expired grant remained active');
+  check(!(await db.prepare(acquire).bind('world', 'next-owner', 'fresh-lease', 120).first()), 'expiry alone permitted takeover');
+  const finalReceipt = await db.prepare('SELECT operation_id FROM committed_operations WHERE world_id=?1 AND result_generation=?2').bind('world', 2).first();
+  check((await db.prepare(release).bind('world', winner.owner, winner.lease, epoch, finalReceipt.operation_id, 2).all()).results.length === 1, 'confirmed release failed');
   const next = await db.prepare(acquire).bind('world', 'next-owner', 'fresh-lease', 120).first();
   check(next.epoch === epoch + 1, 'fresh acquisition did not fence prior epoch');
   check((await db.prepare(release).bind('world', winner.owner, winner.lease, epoch, 'same-operation', 1).all()).results.length === 0, 'old owner released newer lease');
@@ -146,9 +149,12 @@ try {
   check(replacement, 'replacement endpoint publication failed');
   check(!(await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, publish.endpoint_revision, null).first()), 'stale callback revoked replacement');
   check(!(await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, revision, 'stale.example').first()), 'stale callback replaced endpoint');
+  check((await db.prepare(commit).bind('api-world', 'api-final', 'api-owner', 'api-lease', grant.epoch, 0, 'digest-final').all()).results.length === 1, 'test final commit failed');
   await db.prepare("UPDATE worlds SET expires=unixepoch('now') WHERE id=?1").bind('api-world').run();
   check(!(await db.prepare(endpointStatus).bind('api-world').first()), 'expired endpoint remained visible');
   check(!(await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, replacement.endpoint_revision, 'stale.example').first()), 'expired owner published endpoint');
+  check(!(await db.prepare(acquire).bind('api-world', 'new-owner', 'new-lease', 120).first()), 'expired endpoint owner was taken over without release');
+  check((await db.prepare(release).bind('api-world', 'api-owner', 'api-lease', grant.epoch, 'api-final', 1).all()).results.length === 1, 'test release failed');
   await db.prepare(acquire).bind('api-world', 'new-owner', 'new-lease', 120).first();
   check(!(await db.prepare(endpointStatus).bind('api-world').first()), 'old endpoint leaked into new lease');
   console.log('PASS: Miniflare D1 bindings: leases, retries, renewals, commits, releases, concurrency, rollback');
