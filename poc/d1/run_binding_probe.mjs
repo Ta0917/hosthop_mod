@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createLeaseService } from './lease_service.mjs';
 
 if (process.argv.length !== 3) throw new Error('Pass the path to the miniflare package');
 const require = createRequire(import.meta.url);
@@ -95,6 +96,30 @@ try {
   check(latest.epoch === next.epoch + 1 && latest.generation === 3, 'successor did not acquire released generation');
   check((await db.prepare(commitStatus).bind('world', 'final-operation').first()).digest === 'digest-final', 'later acquisition erased commit receipt');
   check((await db.prepare(release).bind('world', 'next-owner', 'fresh-lease', next.epoch, 'final-operation', 3).all()).results.length === 0, 'release retry affected successor');
+  await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('api-world').run();
+  const token = 'a'.repeat(43);
+  const tokenBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  const tokenHash = Array.from(new Uint8Array(tokenBytes), b => b.toString(16).padStart(2, '0')).join('');
+  const service = createLeaseService({ acquire, renew, acquireStatus });
+  const env = { DB: db, MEMBERS: [{ world: 'api-world', owner: 'api-owner', tokenHash }] };
+  const request = (route, body, credential = token) => service.fetch(new Request(`https://example.invalid/${route}`, {
+    method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
+  }), env);
+  const grantBody = { world: 'api-world', lease: 'api-lease', duration: 120, owner: 'forged-owner' };
+  check((await request('acquire', grantBody, 'b'.repeat(43))).status === 401, 'invalid token accepted');
+  check((await request('acquire', { ...grantBody, world: 'world' })).status === 401, 'token used for different world');
+  const grantResponse = await request('acquire', grantBody);
+  check(grantResponse.status === 200, 'authorized grant failed');
+  const grant = await grantResponse.json();
+  check((await request('acquire', grantBody)).status === 409, 'grant retry created another grant');
+  const recovered = await request('acquire-status', grantBody);
+  check(recovered.status === 200 && (await recovered.json()).epoch === grant.epoch, 'lost grant response could not be reconciled');
+  check((await request('acquire-status', { ...grantBody, duration: 119 })).status === 404, 'different acquisition request matched');
+  check((await db.prepare('SELECT owner FROM worlds WHERE id=?1').bind('api-world').first()).owner === 'api-owner', 'client chose owner');
+  check((await request('renew', { ...grantBody, epoch: grant.epoch })).status === 200, 'authorized renewal failed');
+  check((await request('renew', { ...grantBody, epoch: grant.epoch + 1 })).status === 409, 'wrong epoch renewed');
+  check((await request('acquire', { ...grantBody, duration: 301 })).status === 400, 'invalid duration accepted');
+  check((await request('acquire', { ...grantBody, extra: 'x'.repeat(5000) })).status === 400, 'oversized body accepted');
   console.log('PASS: Miniflare D1 bindings: leases, retries, renewals, commits, releases, concurrency, rollback');
 } finally {
   await mf.dispose();
