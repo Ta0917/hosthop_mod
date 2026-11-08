@@ -18,6 +18,7 @@ test('generates distinct invitations matching Worker credentials and refuses ove
     const members = JSON.parse(await readFile(join(output, 'members-secrets.json'), 'utf8'));
     const worlds = JSON.parse(await readFile(join(output, 'worlds-secrets.json'), 'utf8'));
     assert.deepEqual(worlds, [{ id: 'world', folder: 'folder' }]);
+    assert.equal(await readFile(join(output, 'initialize-world.sql'), 'utf8'), "INSERT INTO worlds (id) VALUES ('world');\n");
     const codes = await Promise.all(['one', 'two'].map(name => readFile(join(output, `invite-${name}.txt`), 'utf8')));
     const invites = codes.map(code => JSON.parse(Buffer.from(code.trim().slice('hosthop1:'.length), 'base64url')));
     assert.notEqual(invites[0].member_token, invites[1].member_token);

@@ -34,6 +34,8 @@ try {
   }
   await writeFile(join(output, 'members-secrets.json'), JSON.stringify(members) + '\n', { flag: 'wx', mode: 0o600 });
   await writeFile(join(output, 'worlds-secrets.json'), JSON.stringify([{ id: config.world, folder: config.drive_folder }]) + '\n', { flag: 'wx', mode: 0o600 });
+  // World identifiers are restricted to the ASCII identifier grammar above.
+  await writeFile(join(output, 'initialize-world.sql'), `INSERT INTO worlds (id) VALUES ('${config.world}');\n`, { flag: 'wx', mode: 0o600 });
   console.log('Configuration and invitations generated. Treat the output directory as secret.');
 } catch (error) {
   console.error('Provisioning failed. Check the input and output path; any partially created output must not be used.');

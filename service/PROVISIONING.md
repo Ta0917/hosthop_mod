@@ -4,6 +4,6 @@
 
 1. `provision.example.json` をGit管理外の安全な場所へコピーし、各項目を実際の値にする。`members` は参加者ごとに異なる英数字・`_`・`-` の識別子を指定する。
 2. リポジトリのルートで `node service/provision.mjs <設定ファイル> <未作成の出力フォルダー>` を実行する。出力先の上書きはできない。
-3. 出力の `members-secrets.json` と `worlds-secrets.json` はそれぞれWorkerの `MEMBERS_JSON` と `WORLDS_JSON` に設定するJSON。`invite-識別子.txt` は対応する参加者専用の招待コード。
+3. 出力の `members-secrets.json` と `worlds-secrets.json` はそれぞれWorkerの `MEMBERS_JSON` と `WORLDS_JSON` に設定するJSON。`invite-識別子.txt` は対応する参加者専用の招待コード。`initialize-world.sql` は空のD1データベースに `poc/d1/schema.sql` を適用した後、ワールドを1回だけ登録するためのSQL。
 
 設定ファイルと招待コードは秘密情報を含む。Gitに追加せず、安全な方法で本人にだけ渡す。出力フォルダー内のファイル権限は実行環境に依存するので、Windowsでは保存先フォルダーのアクセス権を自分で確認する。生成が途中で失敗した場合、部分的な出力は使用せず、別の未作成フォルダーでやり直す。招待コードの失効・再発行操作は未実装。
