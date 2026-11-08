@@ -222,7 +222,7 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         }
     }
 
-    private static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]> {
+    static final class BoundedBody implements HttpResponse.BodySubscriber<byte[]> {
         private final CompletableFuture<byte[]> result = new CompletableFuture<>();
         private final java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
         private Flow.Subscription subscription;
