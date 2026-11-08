@@ -141,10 +141,14 @@ public final class LeaseAuthorityClient {
 
     private static Exchange httpExchange() {
         var client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).followRedirects(HttpClient.Redirect.NEVER).build();
+        return httpExchange(client, Duration.ofSeconds(10));
+    }
+
+    static Exchange httpExchange(HttpClient client, Duration timeout) {
         return request -> {
             var pending = client.sendAsync(request, info -> new LimitedBody());
             try {
-                var response = pending.get(10, TimeUnit.SECONDS);
+                var response = pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
                 return new Reply(response.statusCode(), new String(response.body(), StandardCharsets.UTF_8));
             } catch (TimeoutException | ExecutionException failure) {
                 pending.cancel(true);
