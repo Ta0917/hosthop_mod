@@ -370,6 +370,26 @@ tasks.register('seedLatestCopyLive', JavaExec) {
         args project.property('seedInvitation'), project.property('seedCredentials'), project.property('seedArchive'), project.property('seedDirectory')
     }
 }
+tasks.register('driveCrossAccountLiveCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.DriveCrossAccountLiveCheck'
+    if (project.hasProperty('crossOwnerOnly') && project.hasProperty('crossInvitation') && project.hasProperty('crossOwnerCredentials')) {
+        args '--owner-only', project.property('crossInvitation'), project.property('crossOwnerCredentials')
+    } else if (project.hasProperty('crossInvitation') && project.hasProperty('crossOwnerCredentials')
+            && project.hasProperty('crossArchive') && project.hasProperty('crossDirectory')) {
+        args project.property('crossInvitation'), project.property('crossOwnerCredentials'),
+                project.property('crossArchive'), project.property('crossDirectory')
+    }
+}
+tasks.register('prepareClientCredentials', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.PrepareClientCredentials'
+    if (project.hasProperty('clientInvitation') && project.hasProperty('clientDriveCredentials') && project.hasProperty('clientCredentialsOutput')) {
+        args project.property('clientInvitation'), project.property('clientDriveCredentials'), project.property('clientCredentialsOutput')
+    }
+}
 tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck'), tasks.named('invitationSafetyCheck'), tasks.named('pendingHostRecoveryCheck') }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
