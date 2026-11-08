@@ -103,7 +103,11 @@ public final class HostHopScreen extends Screen {
                 Minecraft minecraft = Minecraft.getInstance();
                 minecraft.execute(() -> {
                     if (id != request.get() || minecraft.gui.screen() != this) return;
-                    if (!host.held()) {
+                    // A previous local pre-launch attempt may still own the lease.
+                    // Let the runtime inspect its protected journal before treating
+                    // an unpublished host as an indefinitely running remote host.
+                    boolean localPending = Files.exists(secretPath().getParent().resolve("pending-host.dat"));
+                    if (!host.held() || (host.endpoint() == null && localPending)) {
                         var vault = new WindowsSecretStore(secretPath());
                         var authorization = new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret());
                         var credentials = new DriveCredentialManager(vault, authorization);
