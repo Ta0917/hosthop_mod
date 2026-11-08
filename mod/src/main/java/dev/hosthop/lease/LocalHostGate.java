@@ -134,9 +134,10 @@ public final class LocalHostGate {
         return true;
     }
 
-    /** Caller must confirm the lease was released at the authority. */
-    public synchronized boolean confirmReleased(Attempt attempt) {
+    /** Caller must authenticate the authority's release record. */
+    public synchronized boolean confirmReleased(Attempt attempt, ReleaseRecord receipt) {
         if (attempt == null || attempt != current || phase != Phase.RELEASE_REQUIRED) return false;
+        if (receipt == null || !receipt.matches(publication)) return false;
         clearAttempt();
         return true;
     }

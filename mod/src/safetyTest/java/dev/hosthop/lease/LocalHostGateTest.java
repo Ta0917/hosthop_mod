@@ -1,14 +1,48 @@
 package dev.hosthop.lease;
 
 public final class LocalHostGateTest {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         requiresVerifiedGenerationAndLiveLease();
         validRenewalExtendsHostingAndRejectsOlderResponse();
         expiredRenewalCannotReviveHost();
         lateCallbacksCannotRestartAStoppedAttempt();
         gracefulPublicationRequiresOrderedEvidence();
         expiredPublicationRequiresReconciliation();
+        publicationJournalPreservesEvidence();
         System.out.println("LocalHostGate safety checks passed");
+    }
+
+    private static void publicationJournalPreservesEvidence() throws Exception {
+        var directory = java.nio.file.Files.createTempDirectory("hosthop-journal-test-");
+        var path = directory.resolve("pending");
+        try {
+            var expected = publication(5, 3, "operation", "digest");
+            PendingPublicationJournal.create(path, expected);
+            check(expected.equals(PendingPublicationJournal.read(path)), "journal did not round-trip");
+            try {
+                PendingPublicationJournal.create(path, publication(5, 3, "other", "digest"));
+                throw new AssertionError("journal was overwritten");
+            } catch (java.nio.file.FileAlreadyExistsException expectedFailure) { }
+            check(expected.equals(PendingPublicationJournal.read(path)), "overwrite changed journal");
+            var bytes = java.nio.file.Files.readAllBytes(path);
+            bytes[10] ^= 1;
+            java.nio.file.Files.write(path, bytes);
+            expectJournalFailure(path);
+            java.nio.file.Files.write(path, new byte[] { 1, 2, 3 });
+            expectJournalFailure(path);
+            java.nio.file.Files.delete(path);
+            expectJournalFailure(path);
+        } finally {
+            java.nio.file.Files.deleteIfExists(path);
+            java.nio.file.Files.delete(directory);
+        }
+    }
+
+    private static void expectJournalFailure(java.nio.file.Path path) throws Exception {
+        try {
+            PendingPublicationJournal.read(path);
+            throw new AssertionError("invalid journal accepted");
+        } catch (java.io.IOException expected) { }
     }
 
     private static void gracefulPublicationRequiresOrderedEvidence() {
@@ -36,9 +70,11 @@ public final class LocalHostGateTest {
         expectAcquireFailure(gate);
         check(!gate.requireStop(attempt), "stop request bypassed release");
         check(!gate.confirmStopped(attempt), "stop confirmation bypassed release");
-        check(gate.confirmReleased(attempt), "release rejected");
+        check(!gate.confirmReleased(attempt, new ReleaseRecord("world", "owner", "lease", 4, "other", 8)), "wrong release accepted");
+        var release = new ReleaseRecord("world", "owner", "lease", 4, "op", 8);
+        check(gate.confirmReleased(attempt, release), "release rejected");
         var next = gate.beginAcquire();
-        check(!gate.confirmReleased(attempt), "stale release accepted");
+        check(!gate.confirmReleased(attempt, release), "stale release accepted");
         check(gate.requireStop(next), "new attempt unavailable");
     }
 
