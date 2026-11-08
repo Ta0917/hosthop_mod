@@ -125,12 +125,17 @@ public final class HostWorldRuntime {
             if (pending.exists()) {
                 // These stages are written before Minecraft can be launched. A later
                 // stage may contain unsaved play and must never be discarded this way.
-                var evidence = pending.load();
-                if (!PendingHostRecovery.abortUnstarted(evidence, invitation.world(), invitation.principal(), authority::abort, authority::cancelAcquisition)
-                        && !recoverCommittedHost(evidence)) {
+                try {
+                    var evidence = pending.load();
+                    if (!PendingHostRecovery.abortUnstarted(evidence, invitation.world(), invitation.principal(), authority::abort, authority::cancelAcquisition)
+                            && !recoverCommittedHost(evidence)) {
+                        tell("screen.hosthop.recovery_required"); cleanup(); return;
+                    }
+                    Files.deleteIfExists(pendingPath);
+                } catch (IOException | InterruptedException | RuntimeException unresolved) {
+                    if (unresolved instanceof InterruptedException) Thread.currentThread().interrupt();
                     tell("screen.hosthop.recovery_required"); cleanup(); return;
                 }
-                Files.deleteIfExists(pendingPath);
             }
             String id = UUID.randomUUID().toString();
             Path game = minecraft.gameDirectory.toPath().toAbsolutePath().normalize();
