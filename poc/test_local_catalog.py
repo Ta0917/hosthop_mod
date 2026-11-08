@@ -81,6 +81,13 @@ class LocalCatalogTest(unittest.TestCase):
         self.assertEqual(1, lease_model.state(self.db)[3])
         self.assertIn(lease_model.state(self.db)[4], (first, second))
 
+    def test_verified_commit_retry_does_not_advance_generation(self):
+        epoch, generation = lease_model.acquire(self.db, "host-a", 10, 10)
+        digest = local_catalog.stage(self.store, self.archive)
+        self.assertEqual((1,), local_catalog.commit_once(self.store, "request-1", "host-a", epoch, 11, generation, digest))
+        self.assertEqual((1,), local_catalog.commit_once(self.store, "request-1", "host-a", epoch, 12, generation, digest))
+        self.assertEqual((1, digest), lease_model.state(self.db)[3:])
+
 
 if __name__ == "__main__":
     unittest.main()

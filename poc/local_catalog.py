@@ -80,6 +80,11 @@ def commit(root, owner, epoch, now, expected_generation, digest):
     return lease_model.commit(Path(root) / "catalog.sqlite", owner, epoch, now, expected_generation, digest)
 
 
+def commit_once(root, operation_id, owner, epoch, now, expected_generation, digest):
+    _verify_object(root, digest)
+    return lease_model.commit_once(Path(root) / "catalog.sqlite", operation_id, owner, epoch, now, expected_generation, digest)
+
+
 def restore_latest(root, destination):
     epoch, owner, expires, generation, digest = lease_model.state(Path(root) / "catalog.sqlite")
     if generation == 0 or digest is None:
