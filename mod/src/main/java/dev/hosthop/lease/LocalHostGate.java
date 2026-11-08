@@ -82,11 +82,15 @@ public final class LocalHostGate {
     }
 
     /** A renewal cannot revive an expired lease or a stopped/replaced attempt. */
-    public synchronized boolean acceptRenewal(Attempt attempt, Renewal renewal, long renewedEpoch,
+    public synchronized boolean acceptRenewal(Attempt attempt, Renewal renewal, long renewedEpoch, long renewedGeneration,
                                                ConservativeLeaseDeadline renewed, long nowNanos, long nowMillis) {
         if (attempt == null || attempt != current || renewal == null || renewal != pendingRenewal ||
                 !mayRenewInPhase()) return false;
-        if (renewedEpoch != epoch || renewed == null) return false;
+        if (renewedEpoch != epoch || renewedGeneration != generation || renewed == null) {
+            pendingRenewal = null;
+            phase = Phase.STOP_REQUIRED;
+            return false;
+        }
         pendingRenewal = null;
         if (!checkDeadline(nowNanos, nowMillis)) return false;
         if (!renewed.isUsable(nowNanos, nowMillis)) {
@@ -94,6 +98,14 @@ public final class LocalHostGate {
             return false;
         }
         deadline = renewed;
+        return true;
+    }
+
+    /** A failed superseded request must not stop a newer successful renewal. */
+    public synchronized boolean renewalFailed(Attempt attempt, Renewal renewal) {
+        if (attempt == null || attempt != current || renewal == null || renewal != pendingRenewal || !mayRenewInPhase()) return false;
+        pendingRenewal = null;
+        phase = Phase.STOP_REQUIRED;
         return true;
     }
 

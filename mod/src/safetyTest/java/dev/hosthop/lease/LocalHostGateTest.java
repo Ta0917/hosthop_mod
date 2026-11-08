@@ -125,7 +125,7 @@ public final class LocalHostGateTest {
         check(!gate.finalSnapshotVerified(attempt, 6, 0, 0), "wrong base generation accepted");
         var renewal = gate.beginRenewal(attempt, 5_000_000_000L, 5000);
         var extension = ConservativeLeaseDeadline.fromGrant(5_000_000_000L, 5000, 105, 135, 2);
-        check(gate.acceptRenewal(attempt, renewal, 4, extension, 6_000_000_000L, 6000), "snapshot renewal rejected");
+        check(gate.acceptRenewal(attempt, renewal, 4, 7, extension, 6_000_000_000L, 6000), "snapshot renewal rejected");
         check(gate.finalSnapshotVerified(attempt, 7, 6_000_000_000L, 6000), "verified snapshot rejected");
         var operation = publication(4, 7, "op", "digest");
         check(!gate.mayPublish(attempt, publication(3, 7, "op", "digest"), 6_000_000_000L, 6000), "wrong epoch accepted");
@@ -199,7 +199,7 @@ public final class LocalHostGateTest {
         check(gate.beginHosting(attempt, 0, 0), "host start failed");
         var renewal = gate.beginRenewal(attempt, 1_000_000_000L, 1000);
         var newDeadline = ConservativeLeaseDeadline.fromGrant(26_000_000_000L, 26_000, 126, 156, 2);
-        check(!gate.acceptRenewal(attempt, renewal, 2, newDeadline, 27_000_000_000L, 27_000), "late renewal revived expired host");
+        check(!gate.acceptRenewal(attempt, renewal, 2, 1, newDeadline, 27_000_000_000L, 27_000), "late renewal revived expired host");
         check(gate.phase() == LocalHostGate.Phase.STOP_REQUIRED, "late renewal did not require stop");
         check(!gate.mayContinueHosting(attempt, 28_000_000_000L, 28_000), "expired host remained active");
     }
@@ -213,8 +213,8 @@ public final class LocalHostGateTest {
         var older = gate.beginRenewal(attempt, 5_000_000_000L, 5000);
         var latest = gate.beginRenewal(attempt, 5_000_000_000L, 5000);
         var extension = ConservativeLeaseDeadline.fromGrant(5_000_000_000L, 5000, 105, 135, 2);
-        check(!gate.acceptRenewal(attempt, older, 3, extension, 6_000_000_000L, 6000), "outdated renewal accepted");
-        check(gate.acceptRenewal(attempt, latest, 3, extension, 6_000_000_000L, 6000), "valid renewal rejected");
+        check(!gate.acceptRenewal(attempt, older, 3, 2, extension, 6_000_000_000L, 6000), "outdated renewal accepted");
+        check(gate.acceptRenewal(attempt, latest, 3, 2, extension, 6_000_000_000L, 6000), "valid renewal rejected");
         check(gate.mayContinueHosting(attempt, 30_000_000_000L, 30_000), "valid extension did not extend lease");
         check(!gate.mayContinueHosting(attempt, 32_000_000_000L, 32_000), "extended deadline did not expire");
     }
