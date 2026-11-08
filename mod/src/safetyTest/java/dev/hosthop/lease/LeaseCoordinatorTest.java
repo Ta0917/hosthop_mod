@@ -13,20 +13,25 @@ public final class LeaseCoordinatorTest {
         }, () -> 0, () -> 0);
         var gate = new LocalHostGate();
         var coordinator = new LeaseCoordinator(gate, client, () -> 0, () -> 0);
-        var attempt = gate.beginAcquire();
-        try { coordinator.acquire(attempt, "world", "lease", 30, 2); throw new AssertionError(); }
+        var acquisition = coordinator.begin("world", "lease", "owner", 30, 2);
+        var attempt = acquisition.attempt();
+        var otherCoordinator = new LeaseCoordinator(new LocalHostGate(), client, () -> 0, () -> 0);
+        try { otherCoordinator.acquire(acquisition); throw new AssertionError(); }
+        catch (IllegalArgumentException expected) { }
+        try { coordinator.acquire(acquisition); throw new AssertionError(); }
         catch (IOException expected) { }
         check(gate.phase() == LocalHostGate.Phase.ACQUIRING);
         response.set("{\"owner\":\"owner\",\"epoch\":4,\"base_generation\":3,\"duration_seconds\":30,\"active\":1,\"server_now\":100,\"expires\":130}");
-        check(coordinator.recoverAcquisition(attempt, "world", "lease", 30, "owner", 2));
+        check(coordinator.recoverAcquisition(acquisition));
         check(gate.snapshotVerified(attempt, 3, 0, 0) && gate.beginHosting(attempt, 0, 0));
         response.set("{\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}");
-        check(coordinator.renew(attempt, "world", "lease", 30, 4, 2));
+        check(coordinator.renew(acquisition));
         check(gate.phase() == LocalHostGate.Phase.HOSTING);
         response.set(null);
-        try { coordinator.renew(attempt, "world", "lease", 30, 4, 2); throw new AssertionError(); }
+        try { coordinator.renew(acquisition); throw new AssertionError(); }
         catch (IOException expected) { }
         check(gate.phase() == LocalHostGate.Phase.STOP_REQUIRED);
+        check(!coordinator.acquire(acquisition));
 
         var newer = new LocalHostGate();
         var a = newer.beginAcquire();

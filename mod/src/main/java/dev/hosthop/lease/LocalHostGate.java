@@ -28,6 +28,10 @@ public final class LocalHostGate {
         return current;
     }
 
+    public synchronized boolean isAcquiring(Attempt attempt) {
+        return attempt != null && attempt == current && phase == Phase.ACQUIRING;
+    }
+
     /**
      * Restore an unresolved, locally persisted request before allowing acquisition.
      * The caller must discover journals on startup and authenticate any receipt.
