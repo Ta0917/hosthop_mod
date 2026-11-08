@@ -19,6 +19,7 @@ const commitStatus = load('commit_status.sql');
 const release = load('release.sql');
 const endpointUpdate = load('endpoint_update.sql');
 const endpointStatus = load('endpoint_status.sql');
+const endpointRevision = load('endpoint_revision.sql');
 const mf = new Miniflare(convertV4MiniflareOptions({
   modules: true,
   script: 'export default { fetch() { return new Response("local test"); } }',
@@ -102,7 +103,7 @@ try {
   const token = 'a'.repeat(43);
   const tokenBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
   const tokenHash = Array.from(new Uint8Array(tokenBytes), b => b.toString(16).padStart(2, '0')).join('');
-  const service = createLeaseService({ acquire, renew, acquireStatus });
+  const service = createLeaseService({ acquire, renew, acquireStatus, endpointUpdate, endpointStatus, endpointRevision });
   const env = { DB: db, MEMBERS: [{ world: 'api-world', owner: 'api-owner', tokenHash }] };
   const request = (route, body, credential = token) => service.fetch(new Request(`https://example.invalid/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
@@ -122,10 +123,23 @@ try {
   check((await request('renew', { ...grantBody, epoch: grant.epoch + 1 })).status === 409, 'wrong epoch renewed');
   check((await request('acquire', { ...grantBody, duration: 301 })).status === 400, 'invalid duration accepted');
   check((await request('acquire', { ...grantBody, extra: 'x'.repeat(5000) })).status === 400, 'oversized body accepted');
-  const revision = (await db.prepare('SELECT endpoint_revision FROM worlds WHERE id=?1').bind('api-world').first()).endpoint_revision;
-  const publish = await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, revision, 'relay-one.example').first();
+  const revisionResponse = await request('endpoint-revision', { ...grantBody, epoch: grant.epoch });
+  check(revisionResponse.status === 200, 'owner could not retrieve endpoint revision');
+  const revision = (await revisionResponse.json()).endpoint_revision;
+  check((await request('endpoint-update', { ...grantBody, epoch: grant.epoch, revision, endpoint: 'unsafe.example' })).status === 400, 'untrusted endpoint accepted');
+  const publishResponse = await request('endpoint-update', { ...grantBody, epoch: grant.epoch, revision, endpoint: 'relay-one.e4mc.link' });
+  check(publishResponse.status === 200, 'authenticated endpoint publication failed');
+  const publish = await publishResponse.json();
   check(publish && publish.endpoint_revision === revision + 1, 'endpoint publication failed');
-  check((await db.prepare(endpointStatus).bind('api-world').first()).endpoint === 'relay-one.example', 'endpoint lookup failed');
+  const statusResponse = await request('endpoint-status', { world: 'api-world' });
+  check(statusResponse.status === 200 && (await statusResponse.json()).endpoint === 'relay-one.e4mc.link', 'endpoint lookup failed');
+  check((await request('endpoint-status', { world: 'api-world' }, 'b'.repeat(43))).status === 401, 'unauthenticated endpoint lookup succeeded');
+  const otherToken = 'c'.repeat(43);
+  const otherHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(otherToken))), b => b.toString(16).padStart(2, '0')).join('');
+  env.MEMBERS.push({ world: 'api-world', owner: 'other-owner', tokenHash: otherHash });
+  check((await request('endpoint-status', { world: 'api-world' }, otherToken)).status === 200, 'member could not see current endpoint');
+  check((await request('endpoint-update', { ...grantBody, epoch: grant.epoch, revision: publish.endpoint_revision, endpoint: null }, otherToken)).status === 409, 'other member changed current endpoint');
+  check((await request('endpoint-revision', { ...grantBody, epoch: grant.epoch }, otherToken)).status === 409, 'other member read private revision');
   const revoked = await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, publish.endpoint_revision, null).first();
   check(revoked && !(await db.prepare(endpointStatus).bind('api-world').first()), 'revoked endpoint remained visible');
   const replacement = await db.prepare(endpointUpdate).bind('api-world', 'api-owner', 'api-lease', grant.epoch, revoked.endpoint_revision, 'relay-two.example').first();

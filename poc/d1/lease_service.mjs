@@ -28,26 +28,49 @@ async function readJson(request) {
 }
 
 export function createLeaseService(sql) {
-  if (!sql?.acquire || !sql?.renew || !sql?.acquireStatus) throw new Error('missing SQL');
+  if (!sql?.acquire || !sql?.renew || !sql?.acquireStatus || !sql?.endpointUpdate || !sql?.endpointStatus || !sql?.endpointRevision)
+    throw new Error('missing SQL');
   return {
     async fetch(request, env) {
       if (request.method !== 'POST') return json({ error: 'not found' }, 404);
       const route = new URL(request.url).pathname;
-      if (route !== '/acquire' && route !== '/renew' && route !== '/acquire-status') return json({ error: 'not found' }, 404);
+      if (!['/acquire', '/renew', '/acquire-status', '/endpoint-update', '/endpoint-status', '/endpoint-revision'].includes(route))
+        return json({ error: 'not found' }, 404);
       const auth = request.headers.get('Authorization') || '';
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
       if (!tokenPattern.test(token)) return json({ error: 'unauthorized' }, 401);
       let body;
       try { body = await readJson(request); } catch { return json({ error: 'invalid request' }, 400); }
-      if (!body || Array.isArray(body) || typeof body !== 'object' || !identifier(body.world) || !identifier(body.lease)
-          || !Number.isSafeInteger(body.duration) || body.duration < 1 || body.duration > 300
-          || (route === '/renew' && (!Number.isSafeInteger(body.epoch) || body.epoch < 1)))
+      if (!body || Array.isArray(body) || typeof body !== 'object' || !identifier(body.world))
+        return json({ error: 'invalid request' }, 400);
+      if (route !== '/endpoint-status' && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
+      if (['/acquire', '/renew', '/acquire-status'].includes(route)
+          && (!Number.isSafeInteger(body.duration) || body.duration < 1 || body.duration > 300))
+        return json({ error: 'invalid request' }, 400);
+      if (['/renew', '/endpoint-update', '/endpoint-revision'].includes(route) && (!Number.isSafeInteger(body.epoch) || body.epoch < 1))
+        return json({ error: 'invalid request' }, 400);
+      if (route === '/endpoint-update' && (!Number.isSafeInteger(body.revision) || body.revision < 0
+          || (body.endpoint !== null && (typeof body.endpoint !== 'string'
+              || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.e4mc\.link$/.test(body.endpoint)))))
         return json({ error: 'invalid request' }, 400);
       // A high-entropy bearer token identifies a single owner in a single world.
       // The experiment does not implement provisioning, rotation, or revocation.
       const tokenHash = await digestToken(token);
       const member = env.MEMBERS.find(item => item.world === body.world && item.tokenHash === tokenHash);
       if (!member || !identifier(member.owner)) return json({ error: 'unauthorized' }, 401);
+      if (route === '/endpoint-status') {
+        const endpoint = await env.DB.prepare(sql.endpointStatus).bind(body.world).first();
+        return endpoint ? json(endpoint) : json({ error: 'no endpoint' }, 404);
+      }
+      if (route === '/endpoint-revision') {
+        const current = await env.DB.prepare(sql.endpointRevision).bind(body.world, member.owner, body.lease, body.epoch).first();
+        return current ? json(current) : json({ error: 'lease conflict' }, 409);
+      }
+      if (route === '/endpoint-update') {
+        const endpoint = await env.DB.prepare(sql.endpointUpdate)
+          .bind(body.world, member.owner, body.lease, body.epoch, body.revision, body.endpoint).first();
+        return endpoint ? json(endpoint) : json({ error: 'lease conflict' }, 409);
+      }
       if (route === '/acquire-status') {
         const record = await env.DB.prepare(sql.acquireStatus).bind(body.world, body.lease).first();
         if (!record || record.owner !== member.owner || record.duration_seconds !== body.duration)
