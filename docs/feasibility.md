@@ -40,6 +40,8 @@ MOD本体にセッション単位の接続先管理部品 `SessionAddressRegistr
 
 自動再接続のローカル状態管理を追加した。同じ共有ワールドの古くないepochだけを受け入れ、一時的な障害に限って間隔を空けて最大5回試す。利用者の取り消し、キック、認証・互換性エラーでは自動再試行せず、以前の接続試行の遅い応答も拒否する。これは状態管理の単体テストであり、切断理由の判別、接続先の認証、Minecraftの画面・接続処理にはまだ接続していない。
 
+NeoForgeの `ScreenEvent.Opening` で画面差し替えは可能だが、指定版の `ConnectScreen` は自身の `tick` で接続を進めるため、画面を単純に消すと再接続処理自体が止まる可能性がある。画面変化を減らす場合も接続進行・中止・エラー表示を維持する必要があり、実クライアントで検証するまで本体には組み込まない。
+
 ## 安全性の設計候補
 
 Cloudflare Workers Free + D1を制御面、Google Driveをデータ面とする案を候補にする。[D1 Free](https://developers.cloudflare.com/d1/platform/pricing/)は1日500万行読取・10万行書込で、超過時はクエリが失敗する。無料枠に収まること、課金設定、認証、Drive共有・所有者離脱、アップロード性能は未確認。Googleの[デスクトップOAuth](https://developers.google.com/identity/protocols/oauth2/native-app)とPKCEを検討するが、利用者間の認証と保管先の権限設計は未決定。無料枠超過や障害時は停止する設計とし、課金を前提にしない。
