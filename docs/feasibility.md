@@ -2,13 +2,13 @@
 
 ## 現状
 
-作業開始時のフォルダーは空で、Gradle環境は未提供。PATH上のJavaは21で、[26.2公式MDK](https://github.com/NeoForgeMDKs/MDK-26.2-ModDevGradle/blob/main/build.gradle)が指定するJava 25とは異なる。指定された[NeoForge 26.2.0.6-beta](https://maven.neoforged.net/releases/net/neoforged/neoforge/26.2.0.6-beta/)の公開と、Minecraft 26.2向けであることは[実行ログ](https://github.com/neoforged/NeoForge/issues/3257)で確認した。実機起動・ビルドは未実施。
+作業開始時のフォルダーは空で、Gradle環境は未提供。PATH上のJavaは21だが、提供インスタンスのランチャー内にJava 25.0.4.1の実行環境を確認した。ただしjavacを含まない。[26.2公式MDK](https://github.com/NeoForgeMDKs/MDK-26.2-ModDevGradle/blob/a0340c5454c01e43ccf83977601a4d90afee6e1f/build.gradle)を基に、指定NeoForge版に固定した最小MODを作成した。GradleとJDKの取得はタイムアウトし、実機起動・ビルドは未実施。指定された[NeoForge 26.2.0.6-beta](https://maven.neoforged.net/releases/net/neoforged/neoforge/26.2.0.6-beta/)の公開と、Minecraft 26.2向けであることは[実行ログ](https://github.com/neoforged/NeoForge/issues/3257)で確認した。
 
 提供されたCurseForgeインスタンスには指定NeoForge版、e4mc 6.2.3、DQMVI、DQMVI Voice、Iris、Sodiumがある。`saves/dqm`は213ファイル、279,049,002バイトで、MODの追加ディメンションを含む。2026-11-08に作業領域へコピーし、全213ファイルのSHA-256一致を確認した。コピーは個人データを含み得るためgit管理対象から除外する。元データには書き込んでいない。約868MBという事前見積もりとの差と、本番データとの対応は未確認。
 
 ## 接続とホスト移行
 
-[e4mcの配布元](https://modrinth.com/mod/e4mc)は26.2とNeoForgeを対応対象に挙げ、LANサーバーを一時公開するリバースプロキシと説明している。[ソースリポジトリ](https://github.com/vgskye/e4mc-minecraft-architectury)とMaven座標は確認したが、対象バージョンでアドレスを安全に取得するAPIや実機互換性は未検証。
+[e4mcの配布元](https://modrinth.com/mod/e4mc)は26.2とNeoForgeを対応対象に挙げ、LANサーバーを一時公開するリバースプロキシと説明している。公開ソースの[6.2.3を示すリビジョン](https://github.com/vgskye/e4mc-minecraft-architectury/tree/93ce8a8e6cd4fadd5b6f8e222717c5c52976ab82)では、サーバーのTCP listener開始時にトンネルセッションを起動し、停止時に閉じる。割当ドメインはメッセージ処理内のローカル変数からログとチャットに渡され、同ソース内に公開getterは見当たらない。導入済みJARとソースの完全一致、Mixin等による取得の安定性と実機互換性は未検証。ログ解析を正式なAPIとは扱わない。
 
 ホスト上の統合サーバーが停止すると、そのサーバーに属する接続と実行中の状態が失われるため、e4mcのトンネルだけで別PCに実行中のサーバーや接続を移せるとは言えない。これは構成からの推論であり、無切断移行が不可能であると実証したものではない。接続維持、サーバー状態の移植、接続先切替の実験が必要。次に画面遷移なしの再接続を検証し、いずれも成立しない場合は結果と代替案を提示して体験の変更について承認を得る。手動再接続を決定済みの仕様とはしない。
 

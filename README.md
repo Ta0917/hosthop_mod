@@ -4,3 +4,4 @@ Minecraft共有ワールドMODの調査・開発プロジェクト。現時点�
 
 - [技術調査と未解決事項](docs/feasibility.md)
 - `python -m unittest discover -s poc -v` でSQLiteのリースモデルを検証できます。
+- `mod/` はNeoForge 26.2.0.6-beta用の最小起動コードです。ビルド・起動未検証で、共有機能はありません。
