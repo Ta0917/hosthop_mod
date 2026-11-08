@@ -252,6 +252,17 @@ tasks.register('leaseCoordinatorSafetyCheck', JavaExec) {
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.lease.LeaseCoordinatorTest'
 }
+tasks.register('snapshotSafetyCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.snapshot.SnapshotVerifierTest'
+}
+tasks.register('snapshotRealWorldProbe', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.snapshot.SnapshotVerifierTest'
+    args file('../test-data/offline-backup-poc.zip').absolutePath
+}
 // Optional integration check requires the local Miniflare tools installed under .tools.
 tasks.register('leaseServiceIntegrationProbe', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
@@ -260,7 +271,7 @@ tasks.register('leaseServiceIntegrationProbe', JavaExec) {
     systemProperty 'hosthop.bridge', file('../poc/d1/local_https_bridge.mjs').absolutePath
     systemProperty 'hosthop.miniflare', file('../.tools/d1-tool/node_modules/miniflare').absolutePath
 }
-tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck') }
+tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck') }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {
