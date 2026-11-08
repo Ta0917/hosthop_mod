@@ -50,6 +50,7 @@ public final class SnapshotVerifier {
         Path root = destination.toAbsolutePath().normalize();
         try (var archive = ZipFile.builder().setPath(path).get()) {
             var verified = verifyArchive(archive);
+            DiskSpace.require(root.getParent(), verified.result().uncompressedBytes());
             Files.createDirectory(root);
             byte[] buffer = new byte[1024 * 1024];
             for (var item : verified.files().entrySet()) {

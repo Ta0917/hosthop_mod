@@ -185,8 +185,14 @@ public final class HostWorldRuntime {
             com.mojang.logging.LogUtils.getLogger().warn("HostHop preparation failed during {} ({} / {} / {})", stage,
                     error.getClass().getSimpleName(), cause == null ? "none" : cause.getClass().getSimpleName(),
                     root == null ? "none" : root.getClass().getSimpleName());
-            if (acquisition != null && acquisition.epoch() > 0 && !launchRequested) abortBeforeStart();
-            else { tell("screen.hosthop.host_failed"); cleanup(); }
+            if (acquisition != null && acquisition.epoch() > 0 && !launchRequested) {
+                abortBeforeStart();
+                if (error instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace && lastStatus.equals("screen.hosthop.host_failed"))
+                    tell("screen.hosthop.disk_insufficient");
+            } else {
+                tell(error instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace ? "screen.hosthop.disk_insufficient" : "screen.hosthop.host_failed");
+                cleanup();
+            }
         }
     }
 
@@ -306,7 +312,8 @@ public final class HostWorldRuntime {
                 Files.deleteIfExists(journal);
                 tell("screen.hosthop.saved_world");
             } catch (Exception failure) {
-                tell("screen.hosthop.recovery_required");
+                tell(failure instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace
+                        ? "screen.hosthop.disk_recovery" : "screen.hosthop.recovery_required");
             } finally { cleanup(); }
         });
     }

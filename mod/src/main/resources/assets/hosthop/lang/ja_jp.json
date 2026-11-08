@@ -25,6 +25,8 @@
   "screen.hosthop.preparing": "共有ワールドを準備しています…",
   "screen.hosthop.host_ready": "共有ワールドを公開しました",
   "screen.hosthop.host_failed": "ホスト起動に失敗しました。ローカルのコピーは保全されています",
+  "screen.hosthop.disk_insufficient": "ディスクの空き容量が不足しています",
+  "screen.hosthop.disk_recovery": "ディスクの空き容量が不足しています。復旧が必要です",
   "screen.hosthop.lease_failed": "通信が途切れたためホストを停止します",
   "screen.hosthop.recovery_required": "再ホストする前に復旧が必要です",
   "screen.hosthop.cancelled": "ホストの起動を中止しました",

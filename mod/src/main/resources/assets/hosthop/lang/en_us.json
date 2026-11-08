@@ -25,6 +25,8 @@
   "screen.hosthop.preparing": "Preparing the shared world...",
   "screen.hosthop.host_ready": "Shared world is open",
   "screen.hosthop.host_failed": "Host startup failed; the local copy was kept",
+  "screen.hosthop.disk_insufficient": "Not enough free disk space",
+  "screen.hosthop.disk_recovery": "Not enough free disk space; recovery is required",
   "screen.hosthop.lease_failed": "Connection lost; the shared host is stopping",
   "screen.hosthop.recovery_required": "Recovery is required before hosting again",
   "screen.hosthop.cancelled": "Host startup cancelled",

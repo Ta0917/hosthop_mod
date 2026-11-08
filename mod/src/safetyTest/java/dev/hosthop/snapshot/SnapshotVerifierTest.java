@@ -26,6 +26,12 @@ public final class SnapshotVerifierTest {
             System.out.println("Snapshot verified: " + result.files() + " files, " + result.uncompressedBytes() + " bytes");
             return;
         }
+        long reserve = 64L * 1024 * 1024;
+        DiskSpace.check(reserve + 100, 100);
+        try { DiskSpace.check(reserve + 99, 100); throw new AssertionError("Insufficient disk accepted"); }
+        catch (DiskSpace.InsufficientSpace expected) { }
+        try { DiskSpace.check(Long.MAX_VALUE, Long.MAX_VALUE); throw new AssertionError("Overflow accepted"); }
+        catch (IOException expected) { }
         var directory = Files.createTempDirectory("hosthop-snapshot-test-");
         var file = directory.resolve("snapshot.zip");
         var restored = directory.resolve("restored");

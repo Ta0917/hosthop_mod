@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.hosthop.snapshot.SnapshotVerifier;
+import dev.hosthop.snapshot.DiskSpace;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -111,6 +112,7 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
                 || accessToken == null || accessToken.isBlank() || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
             throw new IllegalArgumentException("Invalid Drive download");
         if (downloader == null) throw new IOException("Download transport unavailable");
+        DiskSpace.require(destination.toAbsolutePath().getParent(), object.size());
         URI uri = URI.create("https://www.googleapis.com/drive/v3/files/" + object.fileId() + "?alt=media");
         var request = HttpRequest.newBuilder(uri).timeout(Duration.ofHours(2))
                 .header("Authorization", "Bearer " + accessToken).GET().build();

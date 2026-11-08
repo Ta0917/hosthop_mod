@@ -58,6 +58,8 @@ public final class SnapshotWriter {
         }
         if (!paths.equals(scan(root))) throw new IOException("World file set changed");
         byte[] manifest = manifest(files);
+        // An uncompressed upper estimate plus ZIP/manifest overhead avoids relying on compression.
+        DiskSpace.require(parent, total + total / 1000 + (long) files.size() * 1024 + manifest.length + 1024 * 1024);
         try (var channel = FileChannel.open(realTarget, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
              var zip = new ZipOutputStream(Channels.newOutputStream(channel))) {
             zip.setLevel(1);
