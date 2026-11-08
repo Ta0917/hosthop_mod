@@ -2,7 +2,7 @@
 
 ## 現状
 
-作業開始時のフォルダーは空で、Gradle環境は未提供。PATH上のJavaは21だが、提供インスタンスのランチャー内にJava 25.0.4.1の実行環境を確認した。ただしjavacを含まない。[26.2公式MDK](https://github.com/NeoForgeMDKs/MDK-26.2-ModDevGradle/blob/a0340c5454c01e43ccf83977601a4d90afee6e1f/build.gradle)を基に、指定NeoForge版に固定した最小MODを作成した。GradleとJDKの取得はタイムアウトし、実機起動・ビルドは未実施。指定された[NeoForge 26.2.0.6-beta](https://maven.neoforged.net/releases/net/neoforged/neoforge/26.2.0.6-beta/)の公開と、Minecraft 26.2向けであることは[実行ログ](https://github.com/neoforged/NeoForge/issues/3257)で確認した。
+作業開始時のフォルダーは空で、Gradle環境は未提供。PATH上のJavaは21だが、MicrosoftのJDK 25.0.5を公式配布から取得し、公開SHA-256と一致することを確認した。[26.2公式MDK](https://github.com/NeoForgeMDKs/MDK-26.2-ModDevGradle/blob/a0340c5454c01e43ccf83977601a4d90afee6e1f/build.gradle)を基に、指定NeoForge版に固定した最小MODを作成した。Gradleの取得はタイムアウトし、実機起動・ビルドは未実施。指定された[NeoForge 26.2.0.6-beta](https://maven.neoforged.net/releases/net/neoforged/neoforge/26.2.0.6-beta/)の公開と、Minecraft 26.2向けであることは[実行ログ](https://github.com/neoforged/NeoForge/issues/3257)で確認した。
 
 提供されたCurseForgeインスタンスには指定NeoForge版、e4mc 6.2.3、DQMVI、DQMVI Voice、Iris、Sodiumがある。`saves/dqm`は213ファイル、279,049,002バイトで、MODの追加ディメンションを含む。2026-11-08に作業領域へコピーし、全213ファイルのSHA-256一致を確認した。コピーは個人データを含み得るためgit管理対象から除外する。元データには書き込んでいない。約868MBという事前見積もりとの差と、本番データとの対応は未確認。
 
@@ -23,6 +23,8 @@ Cloudflare Workers Free + D1を制御面、Google Driveをデータ面とする�
 ## PoCと限界
 
 `poc/lease_model.py` はSQLiteの条件付き更新をローカルで試すだけのモデル。16件の同時取得、期限切れの旧ホストによる更新、古い世代の確定をテストした。呼び出し側から時刻を渡すため実サービスで安全ではなく、認証、アップロード、整合性検証、障害復旧、ゲームの停止は実装していない。D1の実環境でのトランザクション、整合性、タイムアウトや再試行も未検証。
+
+`poc/snapshot_manifest.py` は停止済みコピーの全ファイルについてサイズとSHA-256を記録し、欠落・変更・追加を検出するローカル検証。提供ワールドのコピーに対し作成後の再検証が一致した。ハッシュは内容の正しさやセーブの一貫性、ゲームからの復元可能性を証明しない。ライブワールドのスナップショット作成・クラウド同期にも対応していない。
 
 ## 次の検証
 
