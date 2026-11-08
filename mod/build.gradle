@@ -74,6 +74,11 @@ neoForge {
                 systemProperty 'hosthop.hostSmoke', 'true'
                 systemProperty 'hosthop.testBridge', file('../poc/d1/local_https_bridge.mjs').absolutePath
                 systemProperty 'hosthop.miniflare', file('../.tools/d1-tool/node_modules/miniflare').absolutePath
+                if (project.hasProperty('hosthopRealSmoke')) {
+                    systemProperty 'hosthop.realSmoke', 'true'
+                    systemProperty 'hosthop.realInvite', file('../.tools/test-provision-output/invite-test_owner.txt').absolutePath
+                    systemProperty 'hosthop.realCredentials', project.property('hosthopRealCredentials')
+                }
             }
             if (project.hasProperty('hosthopClientDir')) {
                 def root = file('../.tools').canonicalFile.toPath()
@@ -337,6 +342,14 @@ tasks.register('pendingHostRecoveryCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.world.PendingHostRecoveryTest'
+}
+tasks.register('driveLiveCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.DriveLiveCheck'
+    if (project.hasProperty('driveLiveConfig') && project.hasProperty('driveLiveDirectory')) {
+        args project.property('driveLiveConfig'), project.property('driveLiveDirectory')
+    }
 }
 tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck'), tasks.named('invitationSafetyCheck'), tasks.named('pendingHostRecoveryCheck') }
 

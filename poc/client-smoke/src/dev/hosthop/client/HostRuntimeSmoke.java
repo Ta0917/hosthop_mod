@@ -8,6 +8,8 @@ import dev.hosthop.storage.DriveCredentialManager;
 import dev.hosthop.storage.GoogleDriveSnapshotStore;
 import dev.hosthop.storage.SnapshotStore;
 import dev.hosthop.storage.TestDriveCredentials;
+import dev.hosthop.storage.WindowsSecretStore;
+import dev.hosthop.storage.GoogleDriveAuthorization;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -105,6 +107,13 @@ public final class HostRuntimeSmoke {
     }
 
     private static Context setup(Path gameDir) throws Exception {
+        if (Boolean.getBoolean("hosthop.realSmoke")) {
+            var invitation = Invitation.decode(Files.readString(Path.of(System.getProperty("hosthop.realInvite"))).trim());
+            var vault = new WindowsSecretStore(Path.of(System.getProperty("hosthop.realCredentials")));
+            var credentials = new DriveCredentialManager(vault, new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret()));
+            return new Context(null, invitation, credentials, new GoogleDriveSnapshotStore(),
+                    new LeaseAuthorityClient(URI.create(invitation.authority()), invitation.memberToken()));
+        }
         Path temp = gameDir.resolve("hosthop-smoke");
         Files.createDirectories(temp);
         Path keysPath = temp.resolve("test.p12");
@@ -166,7 +175,7 @@ public final class HostRuntimeSmoke {
     }
     private static void finish(Minecraft minecraft) {
         stage = 99;
-        if (context != null) {
+        if (context != null && context.bridge() != null) {
             try { context.bridge().getOutputStream().close(); } catch (Exception ignored) { }
             context.bridge().destroy();
         }
