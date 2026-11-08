@@ -37,14 +37,14 @@ async function readJson(request) {
 export function createLeaseService(sql, verifyObject = verifyDriveObject) {
   if (!sql?.acquire || !sql?.renew || !sql?.acquireStatus || !sql?.endpointUpdate || !sql?.endpointStatus || !sql?.endpointRevision
       || !sql?.commit || !sql?.commitStatus || !sql?.snapshotStatus || !sql?.release || !sql?.releaseStatus || !sql?.abort || !sql?.abortStatus || !sql?.hostStatus
-      || !sql?.cancelAcquisition || !sql?.cancelAcquisitionStatus)
+      || !sql?.cancelAcquisition || !sql?.cancelAcquisitionStatus || !sql?.history)
     throw new Error('missing SQL');
   return {
     async fetch(request, env) {
       if (request.method !== 'POST') return json({ error: 'not found' }, 404);
       const route = new URL(request.url).pathname;
       if (!['/acquire', '/renew', '/acquire-status', '/endpoint-update', '/endpoint-status', '/endpoint-revision',
-        '/commit', '/commit-status', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/cancel-acquisition'].includes(route))
+        '/commit', '/commit-status', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/cancel-acquisition', '/history'].includes(route))
         return json({ error: 'not found' }, 404);
       const auth = request.headers.get('Authorization') || '';
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -53,7 +53,7 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       try { body = await readJson(request); } catch { return json({ error: 'invalid request' }, 400); }
       if (!body || Array.isArray(body) || typeof body !== 'object' || !identifier(body.world))
         return json({ error: 'invalid request' }, 400);
-      if (!['/endpoint-status', '/snapshot-status', '/host-status'].includes(route) && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
+      if (!['/endpoint-status', '/snapshot-status', '/host-status', '/history'].includes(route) && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
       if (['/acquire', '/renew', '/acquire-status'].includes(route)
           && (!Number.isSafeInteger(body.duration) || body.duration < 1 || body.duration > 300))
         return json({ error: 'invalid request' }, 400);
@@ -79,6 +79,10 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       const tokenHash = await digestToken(token);
       const member = env.MEMBERS.find(item => item.world === body.world && sameHash(item.tokenHash, tokenHash));
       if (!member || !identifier(member.owner)) return json({ error: 'unauthorized' }, 401);
+      if (route === '/history') {
+        const rows = await env.DB.prepare(sql.history).bind(body.world).all();
+        return json({ snapshots: rows.results });
+      }
       if (route === '/cancel-acquisition') {
         // The caller must have stopped its local process and never started the server.
         // Serial D1 writes fence both already-granted and delayed acquire requests.

@@ -183,6 +183,61 @@ public final class LeaseAuthorityClient {
         return new Snapshot(generation, new GoogleDriveSnapshotStore.ObjectRef(objectId, digest, size));
     }
 
+    /** Returns up to four committed snapshot references, newest first. */
+    public List<Snapshot> history(String world) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID)) throw new IllegalArgumentException("Invalid world");
+        var body = new JsonObject(); body.addProperty("world", world);
+        var request = HttpRequest.newBuilder(base.resolve("/history")).timeout(Duration.ofSeconds(10))
+                .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8)).build();
+        var reply = exchange.send(request);
+        if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES)
+            throw new IOException("History request failed");
+        var snapshots = new java.util.ArrayList<Snapshot>();
+        try (var reader = new JsonReader(new StringReader(reply.body()))) {
+            reader.setLenient(false);
+            reader.beginObject();
+            if (!reader.hasNext() || !reader.nextName().equals("snapshots")) throw new IOException("Invalid history response");
+            reader.beginArray();
+            long previous = -1;
+            while (reader.hasNext()) {
+                if (snapshots.size() >= 4) throw new IOException("Too many history entries");
+                var names = new HashSet<String>();
+                long generation = -1, size = -1; String digest = null, object = null;
+                reader.beginObject();
+                while (reader.hasNext()) {
+                    String key = reader.nextName();
+                    if (!names.add(key)) throw new IOException("Duplicate history field");
+                    switch (key) {
+                        case "generation", "object_size" -> {
+                            if (reader.peek() != JsonToken.NUMBER) throw new IOException("Invalid history number");
+                            String number = reader.nextString();
+                            if (!number.matches("(0|[1-9][0-9]*)")) throw new IOException("Invalid history number");
+                            long value = Long.parseLong(number);
+                            if (key.equals("generation")) generation = value; else size = value;
+                        }
+                        case "digest", "object_id" -> {
+                            if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid history text");
+                            if (key.equals("digest")) digest = reader.nextString(); else object = reader.nextString();
+                        }
+                        default -> throw new IOException("Unknown history field");
+                    }
+                }
+                reader.endObject();
+                if (names.size() != 4 || generation < 1 || (previous != -1 && generation >= previous) || size < 1 || size > 68_719_476_736L
+                        || digest == null || !digest.matches("[0-9a-f]{64}") || object == null || !object.matches("[A-Za-z0-9_-]{1,200}"))
+                    throw new IOException("Invalid history entry");
+                snapshots.add(new Snapshot(generation, new GoogleDriveSnapshotStore.ObjectRef(object, digest, size)));
+                previous = generation;
+            }
+            reader.endArray();
+            if (reader.hasNext()) throw new IOException("Unexpected history field");
+            reader.endObject();
+            if (reader.peek() != JsonToken.END_DOCUMENT) throw new IOException("Trailing history data");
+            return List.copyOf(snapshots);
+        } catch (IllegalStateException | NumberFormatException invalid) { throw new IOException("Invalid history response", invalid); }
+    }
+
     public void abort(String world, String owner, String lease, long epoch, long baseGeneration) throws IOException, InterruptedException {
         if (world == null || !world.matches(ID) || owner == null || !owner.matches(ID) || lease == null || !lease.matches(ID)
                 || epoch < 1 || baseGeneration < 0) throw new IllegalArgumentException("Invalid lease abort");

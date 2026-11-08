@@ -27,7 +27,7 @@ public final class HostHopScreen extends Screen {
     private final Screen parent;
     private final AtomicLong request = new AtomicLong();
     private Component status = Component.translatable("screen.hosthop.initial");
-    private Button register, authorize, authorizeSnapshot, join;
+    private Button register, authorize, authorizeSnapshot, join, history;
     private EditBox initialWorld;
     private boolean startedHere;
     private volatile DriveCredentialManager activeAuthorization;
@@ -46,7 +46,9 @@ public final class HostHopScreen extends Screen {
         authorizeSnapshot = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.authorize_snapshot"), button -> authorizeSnapshot())
                 .bounds(x, height / 2 + 8, 210, 20).build());
         join = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.join"), button -> joinHost())
-                .bounds(x, height / 2 + 34, 210, 20).build());
+                .bounds(x, height / 2 + 34, 130, 20).build());
+        history = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.history"), button -> Minecraft.getInstance().gui.setScreen(new HostHopHistoryScreen(this)))
+                .bounds(x + 134, height / 2 + 34, 76, 20).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
                 .bounds(x, height / 2 + 62, 210, 20).build());
         status = Component.translatable(HostWorldRuntime.lastStatus());
@@ -159,7 +161,7 @@ public final class HostHopScreen extends Screen {
             if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(false, message);
         });
     }
-    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
+    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
 
     @Override public void onClose() {
         request.incrementAndGet();

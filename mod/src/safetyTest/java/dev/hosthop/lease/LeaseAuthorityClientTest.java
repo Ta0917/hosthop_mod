@@ -13,7 +13,7 @@ public final class LeaseAuthorityClientTest {
                 "{\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         var client = new LeaseAuthorityClient(URI.create("https://authority.example/"), "a".repeat(43),
                 request -> {
-                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status", "/endpoint-revision", "/endpoint-update", "/commit", "/commit-status", "/snapshot-status", "/release", "/release-status", "/abort", "/host-status").contains(request.uri().getPath()));
+                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status", "/endpoint-revision", "/endpoint-update", "/commit", "/commit-status", "/snapshot-status", "/release", "/release-status", "/abort", "/host-status", "/history").contains(request.uri().getPath()));
                     check(request.headers().firstValue("Authorization").orElseThrow().equals("Bearer " + "a".repeat(43)));
                     return reply.get();
                 }, nanos::get, millis::get);
@@ -58,6 +58,13 @@ public final class LeaseAuthorityClientTest {
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"world_id\":\"world\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"base_generation\":3}"));
         client.abort("world", "owner", "lease", 4, 3);
         expectFailure(() -> client.abort("world", "other", "lease", 4, 3));
+        String item = "{\"generation\":4,\"digest\":\"" + "a".repeat(64) + "\",\"object_id\":\"file\",\"object_size\":42}";
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"snapshots\":[" + item + "]}"));
+        check(client.history("world").size() == 1 && client.history("world").get(0).generation() == 4);
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"snapshots\":[" + item + "," + item + "]}"));
+        expectFailure(() -> client.history("world"));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"snapshots\":[]}"));
+        check(client.history("world").isEmpty());
         reply.set(new LeaseAuthorityClient.Reply(409, "{}"));
         expectFailure(() -> client.acquire("world", "lease", 30, 2));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"epoch\":5,\"generation\":3,\"server_now\":100,\"expires\":130}"));

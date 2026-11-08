@@ -26,6 +26,7 @@ const releaseStatus = load('release_status.sql');
 const abort = load('abort.sql');
 const abortStatus = load('abort_status.sql');
 const hostStatus = load('host_status.sql');
+const history = load('history.sql');
 const cancelAcquisition = load('cancel_acquisition.sql');
 const cancelAcquisitionStatus = load('cancel_acquisition_status.sql');
 const mf = new Miniflare(convertV4MiniflareOptions({
@@ -116,7 +117,7 @@ try {
   const tokenHash = Array.from(new Uint8Array(tokenBytes), b => b.toString(16).padStart(2, '0')).join('');
   let objectVerified = false;
   const service = createLeaseService({ acquire, renew, acquireStatus, endpointUpdate, endpointStatus, endpointRevision,
-    commit, commitStatus, snapshotStatus, release, releaseStatus, abort, abortStatus, hostStatus, cancelAcquisition, cancelAcquisitionStatus }, async () => objectVerified);
+    commit, commitStatus, snapshotStatus, release, releaseStatus, abort, abortStatus, hostStatus, cancelAcquisition, cancelAcquisitionStatus, history }, async () => objectVerified);
   const env = { DB: db, MEMBERS: [{ world: 'api-world', owner: 'api-owner', tokenHash }], WORLDS: [{ id: 'api-world', folder: 'folder' }] };
   const request = (route, body, credential = token) => service.fetch(new Request(`https://example.invalid/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
@@ -201,6 +202,25 @@ try {
   check((await request('release', { ...releaseBody, operation: 'wrong' })).status === 409, 'wrong final commit released lease');
   check((await request('release', releaseBody)).status === 200, 'verified final release failed');
   check((await request('release-status', releaseBody)).status === 200, 'release receipt unavailable');
+  const listed = await request('history', { world: 'commit-world' });
+  const saved = await listed.json();
+  check(listed.status === 200 && saved.snapshots.length === 1 && saved.snapshots[0].generation === 1
+      && saved.snapshots[0].object_id === 'drive-file', 'committed snapshot missing from history');
+  check((await request('history', { world: 'commit-world' }, 'b'.repeat(43))).status === 401, 'history accepted unauthorized user');
+  await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('history-world').run();
+  env.MEMBERS.push({ world: 'history-world', owner: 'api-owner', tokenHash });
+  env.WORLDS.push({ id: 'history-world', folder: 'folder' });
+  for (let generation = 0; generation < 5; generation++) {
+    const lease = `history-${generation}`;
+    const g = await (await request('acquire', { world: 'history-world', lease, duration: 120 })).json();
+    const operation = `history-op-${generation}`;
+    const item = { world: 'history-world', lease, epoch: g.epoch, operation, previousGeneration: generation,
+      digest: 'a'.repeat(64), fileId: `file-${generation}`, size: 42, driveToken: 'temporary-token' };
+    check((await request('commit', item)).status === 200, 'history test commit failed');
+    check((await request('release', { ...item, resultGeneration: generation + 1 })).status === 200, 'history test release failed');
+  }
+  const recent = await (await request('history', { world: 'history-world' })).json();
+  check(recent.snapshots.map(x => x.generation).join(',') === '5,4,3,2', 'history did not return latest four generations');
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('abort-world').run();
   env.MEMBERS.push({ world: 'abort-world', owner: 'api-owner', tokenHash });
   env.WORLDS.push({ id: 'abort-world', folder: 'folder' });

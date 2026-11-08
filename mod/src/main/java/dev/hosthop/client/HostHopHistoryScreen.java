@@ -1,0 +1,59 @@
+package dev.hosthop.client;
+
+import dev.hosthop.config.Invitation;
+import dev.hosthop.lease.LeaseAuthorityClient;
+import dev.hosthop.storage.WindowsSecretStore;
+import java.net.URI;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
+import net.neoforged.fml.loading.FMLPaths;
+
+/** Read-only committed snapshot list; restoration is intentionally separate. */
+public final class HostHopHistoryScreen extends Screen {
+    private final Screen parent;
+    private List<LeaseAuthorityClient.Snapshot> snapshots = List.of();
+    private Component status = Component.translatable("screen.hosthop.history_loading");
+    private boolean requested;
+
+    HostHopHistoryScreen(Screen parent) { super(Component.translatable("screen.hosthop.history_title")); this.parent = parent; }
+
+    @Override protected void init() {
+        addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
+                .bounds(width / 2 - 100, height / 2 + 70, 200, 20).build());
+        if (requested) return;
+        requested = true;
+        CompletableFuture.runAsync(() -> {
+            try {
+                var path = FMLPaths.CONFIGDIR.get().resolve("hosthop").resolve("credentials.dat");
+                var invite = Invitation.fromSecrets(new WindowsSecretStore(path).load());
+                var result = new LeaseAuthorityClient(URI.create(invite.authority()), invite.memberToken()).history(invite.world());
+                Minecraft.getInstance().execute(() -> {
+                    if (Minecraft.getInstance().gui.screen() != this) return;
+                    snapshots = result;
+                    status = Component.translatable(result.isEmpty() ? "screen.hosthop.history_empty" : "screen.hosthop.history_note");
+                });
+            } catch (Exception failure) {
+                Minecraft.getInstance().execute(() -> {
+                    if (Minecraft.getInstance().gui.screen() == this) status = Component.translatable("screen.hosthop.history_failed");
+                });
+            }
+        });
+    }
+    @Override public void onClose() { Minecraft.getInstance().gui.setScreen(parent); }
+    @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+        super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        graphics.centeredText(font, title, width / 2, height / 2 - 88, -1);
+        graphics.centeredText(font, status, width / 2, height / 2 - 64, -1);
+        for (int i = 0; i < snapshots.size(); i++) {
+            var snapshot = snapshots.get(i);
+            long mib = (snapshot.object().size() + 1_048_575) / 1_048_576;
+            graphics.centeredText(font, Component.translatable("screen.hosthop.history_entry", snapshot.generation(), mib),
+                    width / 2, height / 2 - 35 + i * 19, -1);
+        }
+    }
+}

@@ -166,6 +166,7 @@ public final class LeaseServiceIntegrationProbe {
             var recoverTransfer = new SharedWorldTransfer(recoverGate, client, storage, System::nanoTime, System::currentTimeMillis);
             recoverTransfer.recoverStopped(recoverGate.beginRecovery(missingRecord), missingJournal, true, "drive-test-token");
             check(Files.exists(missingJournal) && recoverGate.phase() == LocalHostGate.Phase.IDLE && client.snapshot("world").generation() == 3);
+            check(client.history("world").stream().map(LeaseAuthorityClient.Snapshot::generation).toList().equals(java.util.List.of(3L, 2L, 1L)));
             Files.delete(missingJournal);
             var thirdGate = new LocalHostGate();
             var third = new LeaseCoordinator(thirdGate, client, System::nanoTime, System::currentTimeMillis);

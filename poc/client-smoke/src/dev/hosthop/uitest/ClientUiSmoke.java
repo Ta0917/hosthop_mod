@@ -31,6 +31,16 @@ public final class ClientUiSmoke {
         } else if (stage == 2) {
             stage = 3;
             if (!(minecraft.gui.screen() instanceof HostHopScreen)) throw new IllegalStateException("HostHop screen did not open");
+            var history = minecraft.gui.screen().children().stream().filter(child -> child instanceof Button b
+                    && b.getMessage().getString().equals("History")).map(Button.class::cast).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("History button missing"));
+            history.onPress(new net.minecraft.client.input.InputWithModifiers() {
+                @Override public int input() { return 257; }
+                @Override public int modifiers() { return 0; }
+            });
+            if (!(minecraft.gui.screen() instanceof dev.hosthop.client.HostHopHistoryScreen)) throw new IllegalStateException("History screen did not open");
+            minecraft.gui.screen().onClose();
+            if (!(minecraft.gui.screen() instanceof HostHopScreen)) throw new IllegalStateException("History back failed");
             try { dev.hosthop.client.ReconnectUiSmoke.verify(minecraft.gui.screen()); }
             catch (Exception failure) { throw new IllegalStateException("Reconnect UI test failed", failure); }
             System.out.println("HOSTHOP_UI_SMOKE multiplayer entry and screen verified=true");
