@@ -17,3 +17,5 @@
 ローカルWranglerを用意した環境では、`node poc/d1/run_local_probe.mjs .tools/d1-tool/node_modules/wrangler/bin/wrangler.js` で、再送・期限切れ・エラー時のロールバックを検証できます。テスト用データはGit管理対象外の `.tools/d1-runs` に残ります。
 
 `node poc/d1/run_binding_probe.mjs .tools/d1-tool/node_modules/miniflare` はローカルMiniflareのD1バインディングで、番号付きパラメーターと同時要求を検証します。ネットワーク経由のサービスや本番D1のテストではありません。
+
+`node poc/d1/run_worker_probe.mjs .tools/d1-tool/node_modules/miniflare` はローカルworkerd内でAPIを実行し、認証、リース取得、接続先の公開・照会と古い更新の拒否を検証します。本番にWorkerやDBを作成せず、デプロイ可能性や実環境の安全性を示すものではありません。
