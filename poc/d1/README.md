@@ -19,3 +19,5 @@
 `node poc/d1/run_binding_probe.mjs .tools/d1-tool/node_modules/miniflare` はローカルMiniflareのD1バインディングで、番号付きパラメーターと同時要求を検証します。ネットワーク経由のサービスや本番D1のテストではありません。
 
 `node poc/d1/run_worker_probe.mjs .tools/d1-tool/node_modules/miniflare` はローカルworkerd内でAPIを実行し、認証、リース取得、接続先の公開・照会と古い更新の拒否を検証します。本番にWorkerやDBを作成せず、デプロイ可能性や実環境の安全性を示すものではありません。
+
+`mod` フォルダーで `gradle leaseServiceIntegrationProbe` を実行すると、ローカルHTTPS・workerd・D1をJavaクライアントにつないで試験します。`.tools/d1-tool/node_modules/miniflare` と `node` が必要です。作成する証明書とDBはテスト専用で、取得応答の意図的な喪失も試します。
