@@ -14,6 +14,7 @@ const acquire = load('acquire.sql');
 const acquireStatus = load('acquire_status.sql');
 const renew = load('renew.sql');
 const commit = load('commit.sql');
+const release = load('release.sql');
 const mf = new Miniflare(convertV4MiniflareOptions({
   modules: true,
   script: 'export default { fetch() { return new Response("local test"); } }',
@@ -74,7 +75,24 @@ try {
   check((await db.prepare(acquireStatus).bind('world', winner.lease).first()).active === 0, 'expired grant remained active');
   const next = await db.prepare(acquire).bind('world', 'next-owner', 'fresh-lease', 120).first();
   check(next.epoch === epoch + 1, 'fresh acquisition did not fence prior epoch');
-  console.log('PASS: Miniflare D1 bindings: invalid requests, concurrent leases, acquisition retries, renewal fence, commits, rollback');
+  check((await db.prepare(release).bind('world', winner.owner, winner.lease, epoch, 'same-operation', 1).all()).results.length === 0, 'old owner released newer lease');
+  check((await db.prepare(release).bind('world', 'next-owner', 'fresh-lease', next.epoch, 'same-operation', 1).all()).results.length === 0, 'another lease commit allowed release');
+  check((await db.prepare(commit).bind('world', 'final-operation', 'next-owner', 'fresh-lease', next.epoch, 2, 'digest-final').all()).results.length === 1, 'final commit failed');
+  check((await db.prepare(release).bind('world', 'next-owner', 'fresh-lease', next.epoch, 'final-operation', 2).all()).results.length === 0, 'incorrect final generation released lease');
+  await db.prepare("CREATE TRIGGER fail_release BEFORE UPDATE ON worlds BEGIN SELECT RAISE(ABORT, 'release failure'); END").run();
+  let releaseFailed = false;
+  try { await db.prepare(release).bind('world', 'next-owner', 'fresh-lease', next.epoch, 'final-operation', 3).all(); }
+  catch (error) { if (!String(error).includes('release failure')) throw error; releaseFailed = true; }
+  check(releaseFailed && !(await db.prepare('SELECT 1 FROM lease_releases WHERE world_id=?1 AND lease_id=?2').bind('world', 'fresh-lease').first()), 'release failure left a receipt');
+  await db.prepare('DROP TRIGGER fail_release').run();
+  const releases = await Promise.all(Array.from({length: 8}, () => db.prepare(release).bind('world', 'next-owner', 'fresh-lease', next.epoch, 'final-operation', 3).all()));
+  check(releases.reduce((n, result) => n + result.results.length, 0) === 1, 'release was not applied exactly once');
+  const receipt = await db.prepare('SELECT owner,epoch,operation_id,result_generation FROM lease_releases WHERE world_id=?1 AND lease_id=?2').bind('world', 'fresh-lease').first();
+  check(receipt.owner === 'next-owner' && receipt.epoch === next.epoch && receipt.operation_id === 'final-operation' && receipt.result_generation === 3, 'release receipt differs');
+  const latest = await db.prepare(acquire).bind('world', 'third-owner', 'third-lease', 120).first();
+  check(latest.epoch === next.epoch + 1 && latest.generation === 3, 'successor did not acquire released generation');
+  check((await db.prepare(release).bind('world', 'next-owner', 'fresh-lease', next.epoch, 'final-operation', 3).all()).results.length === 0, 'release retry affected successor');
+  console.log('PASS: Miniflare D1 bindings: leases, retries, renewals, commits, releases, concurrency, rollback');
 } finally {
   await mf.dispose();
 }

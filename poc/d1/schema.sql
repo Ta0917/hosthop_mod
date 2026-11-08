@@ -30,6 +30,30 @@ BEGIN
     SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'stale lease grant') END;
 END;
 
+-- A release is recorded only after a matching final commit. The record makes
+-- retries distinguishable from a later owner's lease, without releasing it.
+CREATE TABLE lease_releases (
+    world_id TEXT NOT NULL,
+    lease_id TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    epoch INTEGER NOT NULL,
+    operation_id TEXT NOT NULL,
+    result_generation INTEGER NOT NULL,
+    PRIMARY KEY (world_id, lease_id)
+);
+
+CREATE TRIGGER apply_lease_release AFTER INSERT ON lease_releases
+BEGIN
+    UPDATE worlds SET owner = NULL, lease_id = NULL, expires = 0
+    WHERE id = NEW.world_id AND owner = NEW.owner AND lease_id = NEW.lease_id
+      AND epoch = NEW.epoch AND generation = NEW.result_generation
+      AND EXISTS (SELECT 1 FROM committed_operations c WHERE c.world_id = NEW.world_id
+        AND c.operation_id = NEW.operation_id AND c.owner = NEW.owner
+        AND c.lease_id = NEW.lease_id AND c.epoch = NEW.epoch
+        AND c.result_generation = NEW.result_generation);
+    SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'stale release') END;
+END;
+
 CREATE TABLE committed_operations (
     world_id TEXT NOT NULL,
     operation_id TEXT NOT NULL,
