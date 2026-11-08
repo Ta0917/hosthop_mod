@@ -38,6 +38,10 @@ public final class LeaseAuthorityClient {
     private final LongSupplier millis;
 
     public record Reply(int status, String body) {}
+    /** No matching publication was found; it may still be in flight. */
+    public static final class PublicationNotFound extends IOException {
+        private PublicationNotFound() { super("Publication was not found"); }
+    }
     public record Grant(long epoch, long generation, ConservativeLeaseDeadline deadline) {}
     public record Endpoint(String world, long epoch, long generation, long revision, String address,
                            ConservativeLeaseDeadline deadline) {}
@@ -263,6 +267,7 @@ public final class LeaseAuthorityClient {
                 .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(text, StandardCharsets.UTF_8)).build();
         Reply reply = exchange.send(request);
+        if (reply != null && reply.status() == 404 && route.equals("commit-status")) throw new PublicationNotFound();
         if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES)
             throw new IOException("Authority request failed");
         return parseFields(reply.body());

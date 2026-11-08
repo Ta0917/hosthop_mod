@@ -151,11 +151,40 @@ public final class LeaseServiceIntegrationProbe {
             nextTransfer.publishAfterStopped(nextAcquisition, preparedB, finalArchive2, journal2, "op-2", "folder", "drive-test-token");
             check(nextGate.phase() == LocalHostGate.Phase.IDLE && !Files.exists(journal2));
             check(client.snapshot("world").generation() == 2);
+            // Simulate a crash after writing the local journal but before sending
+            // the commit: retry the exact operation, then release it safely.
+            var beforeCommitGate = new LocalHostGate();
+            var beforeCommit = new LeaseCoordinator(beforeCommitGate, client, System::nanoTime, System::currentTimeMillis);
+            var beforeCommitLease = beforeCommit.begin("world", "pending-lease", "owner", 30, 2);
+            check(beforeCommit.acquire(beforeCommitLease));
+            var object = storage.upload(finalArchive2, "folder", "drive-test-token");
+            var missingRecord = new PublicationRecord("world", "not-yet-sent", "owner", "pending-lease",
+                    beforeCommitLease.epoch(), 2, object.sha256(), object.fileId(), object.size(), 3);
+            var missingJournal = directory.resolve("not-yet-sent");
+            PendingPublicationJournal.create(missingJournal, missingRecord);
+            var recoverGate = new LocalHostGate();
+            var recoverTransfer = new SharedWorldTransfer(recoverGate, client, storage, System::nanoTime, System::currentTimeMillis);
+            recoverTransfer.recoverStopped(recoverGate.beginRecovery(missingRecord), missingJournal, true, "drive-test-token");
+            check(Files.exists(missingJournal) && recoverGate.phase() == LocalHostGate.Phase.IDLE && client.snapshot("world").generation() == 3);
+            Files.delete(missingJournal);
             var thirdGate = new LocalHostGate();
             var third = new LeaseCoordinator(thirdGate, client, System::nanoTime, System::currentTimeMillis);
             var thirdAcquisition = third.begin("world", "third-lease", "owner", 30, 2);
             check(third.acquire(thirdAcquisition));
             post(http, base, "/test-expire", "{}");
+            var expiredJournal = directory.resolve("expired-pending");
+            var expiredRecord = new PublicationRecord("world", "expired-op", "owner", "third-lease",
+                    thirdAcquisition.epoch(), 3, object.sha256(), object.fileId(), object.size(), 4);
+            PendingPublicationJournal.create(expiredJournal, expiredRecord);
+            var expiredGate = new LocalHostGate();
+            var expiredRecovery = new SharedWorldTransfer(expiredGate, client, storage, System::nanoTime, System::currentTimeMillis);
+            try {
+                expiredRecovery.recoverStopped(expiredGate.beginRecovery(expiredRecord), expiredJournal, true, "drive-test-token");
+                throw new AssertionError("Expired lease committed a pending snapshot");
+            } catch (java.io.IOException expected) { }
+            check(Files.exists(expiredJournal) && expiredGate.phase() == LocalHostGate.Phase.STOP_REQUIRED
+                    && client.snapshot("world").generation() == 3);
+            Files.delete(expiredJournal);
             try { third.renew(thirdAcquisition); throw new AssertionError("expired lease renewed"); }
             catch (java.io.IOException expected) { }
             check(thirdGate.phase() == LocalHostGate.Phase.STOP_REQUIRED);
@@ -188,6 +217,9 @@ public final class LeaseServiceIntegrationProbe {
             Files.deleteIfExists(archiveB);
             Files.deleteIfExists(remote);
             Files.deleteIfExists(remote2);
+            Files.deleteIfExists(directory.resolve("remote-3.zip"));
+            Files.deleteIfExists(directory.resolve("not-yet-sent"));
+            Files.deleteIfExists(directory.resolve("expired-pending"));
             Files.deleteIfExists(journal);
             Files.deleteIfExists(journal2);
             Files.deleteIfExists(finalArchive2);

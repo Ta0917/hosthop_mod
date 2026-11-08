@@ -128,7 +128,7 @@ public final class HostWorldRuntime {
                 try {
                     var evidence = pending.load();
                     if (!PendingHostRecovery.abortUnstarted(evidence, invitation.world(), invitation.principal(), authority::abort, authority::cancelAcquisition)
-                            && !recoverCommittedHost(evidence)) {
+                            && !recoverCommittedHost(evidence, token.accessToken())) {
                         tell("screen.hosthop.recovery_required"); cleanup(); return;
                     }
                     Files.deleteIfExists(pendingPath);
@@ -203,12 +203,12 @@ public final class HostWorldRuntime {
     }
 
     /** Recover only a committed publication written after a verified server stop. */
-    private boolean recoverCommittedHost(Map<String, String> evidence) throws IOException, InterruptedException {
+    private boolean recoverCommittedHost(Map<String, String> evidence, String driveToken) throws IOException, InterruptedException {
         var candidate = PendingHostRecovery.findCommitted(evidence, invitation.world(), invitation.principal(), minecraft.gameDirectory.toPath());
         if (candidate == null) return false;
         try (var lock = dev.hosthop.snapshot.StoppedWorldLock.acquire(candidate.world())) {
             var recovery = gate.beginRecovery(candidate.record());
-            transfer.recoverStopped(recovery, candidate.journal(), true);
+            transfer.recoverStopped(recovery, candidate.journal(), true, driveToken);
             Files.delete(pendingPath);
             Files.delete(candidate.journal());
         }
@@ -297,7 +297,7 @@ public final class HostWorldRuntime {
                             UUID.randomUUID().toString(), invitation.folder(), token, true);
                 } catch (IOException | InterruptedException failure) {
                     if (Files.exists(journal) && gate.phase() == LocalHostGate.Phase.STOP_REQUIRED)
-                        transfer.recoverStopped(acquisition.attempt(), journal, true);
+                        transfer.recoverStopped(acquisition.attempt(), journal, true, token);
                     else if (Files.exists(journal) && gate.phase() == LocalHostGate.Phase.RELEASE_REQUIRED)
                         transfer.completeRelease(acquisition.attempt(), journal, PendingPublicationJournal.read(journal), true);
                     else throw failure;

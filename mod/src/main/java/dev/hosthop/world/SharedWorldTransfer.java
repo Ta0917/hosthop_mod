@@ -107,9 +107,19 @@ public final class SharedWorldTransfer {
     }
 
     public void recoverStopped(LocalHostGate.Attempt attempt, Path journal, boolean retainJournal) throws IOException, InterruptedException {
+        recoverStopped(attempt, journal, retainJournal, null);
+    }
+
+    /** An unconfirmed operation may be safely retried only with its exact persisted identity. */
+    public void recoverStopped(LocalHostGate.Attempt attempt, Path journal, boolean retainJournal, String driveToken) throws IOException, InterruptedException {
         var operation = PendingPublicationJournal.read(journal);
         if (!gate.awaitingReconciliation(attempt, operation)) throw new IOException("Publication recovery state mismatch");
-        var receipt = authority.commitStatus(operation);
+        PublicationRecord receipt;
+        try { receipt = authority.commitStatus(operation); }
+        catch (LeaseAuthorityClient.PublicationNotFound missing) {
+            if (driveToken == null) throw missing;
+            receipt = authority.commit(operation, driveToken);
+        }
         authority.release(operation);
         synchronized (gate) {
             if (!gate.awaitingReconciliation(attempt, operation) || !PendingPublicationJournal.read(journal).equals(operation)) throw new IOException("Publication recovery state changed");
