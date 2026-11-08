@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.hosthop.probe.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["AssignmentMixin", "StopMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

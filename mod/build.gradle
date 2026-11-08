@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
     id 'java-library'
     id 'maven-publish'
@@ -37,6 +39,17 @@ base {
 // Mojang ships Java 25 to end users in 26.2, so mods should target Java 25.
 java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 
+// Explicitly opted-in research code; never included in ordinary builds.
+if (project.hasProperty('e4mcRelayProbe')) {
+    def probeJar = file('run/mods/e4mc-neoforge-6.2.3.jar')
+    def expected = '6000692f216faa67f8a6be26fad6dffd54f1c229ee290f355cd42792c4cdbd57'
+    if (!probeJar.isFile() || MessageDigest.getInstance('SHA-256').digest(probeJar.bytes).encodeHex().toString() != expected) {
+        throw new GradleException('Relay probe requires the exact inspected e4mc 6.2.3 JAR in run/mods')
+    }
+    sourceSets.main.java.srcDir('../poc/e4mc-relay/src')
+    sourceSets.main.resources.srcDir('../poc/e4mc-relay/resources')
+}
+
 neoForge {
     // Specify the version of NeoForge to use.
     version = project.neo_version
@@ -65,6 +78,9 @@ neoForge {
         gameTestServer {
             type = "gameTestServer"
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            if (project.hasProperty('e4mcRelayProbe')) {
+                systemProperty 'hosthop.e4mcRelayProbe', 'true'
+            }
         }
 
         data {
@@ -145,6 +161,7 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
             mod_name               : mod_name,
             mod_license            : mod_license,
             mod_version            : mod_version,
+            relay_mixin            : project.hasProperty('e4mcRelayProbe') ? '[[mixins]]\nconfig="hosthop-relay-probe.mixins.json"' : '',
     ]
     inputs.properties replaceProperties
     expand replaceProperties

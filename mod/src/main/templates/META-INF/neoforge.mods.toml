@@ -43,6 +43,8 @@ description='''
 Shared world hosting research prototype. No synchronization features are enabled yet.
 '''
 
+${relay_mixin}
+
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
 #[[mixins]]
 #config="${mod_id}.mixins.json"
