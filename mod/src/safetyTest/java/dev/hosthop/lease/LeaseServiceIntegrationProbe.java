@@ -1,6 +1,7 @@
 package dev.hosthop.lease;
 
 import dev.hosthop.reconnect.ReconnectController;
+import dev.hosthop.relay.RelayPublisher;
 import dev.hosthop.snapshot.SnapshotVerifier;
 import dev.hosthop.storage.GoogleDriveSnapshotStore;
 import dev.hosthop.storage.SnapshotStore;
@@ -36,6 +37,7 @@ public final class LeaseServiceIntegrationProbe {
         var finalArchive2 = directory.resolve("final-2.zip");
         var journal2 = directory.resolve("pending-2");
         Process bridge = null;
+        java.util.concurrent.ExecutorService relayExecutor = null;
         try {
             var keytool = Path.of(System.getProperty("java.home"), "bin",
                     System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win") ? "keytool.exe" : "keytool");
@@ -81,6 +83,7 @@ public final class LeaseServiceIntegrationProbe {
             };
             Files.createDirectory(initial);
             Files.writeString(initial.resolve("level.dat"), "initial");
+            Files.writeString(initial.resolve("session.lock"), "lock");
             var gate = new LocalHostGate();
             var coordinator = new LeaseCoordinator(gate, client, System::nanoTime, System::currentTimeMillis);
             var transfer = new SharedWorldTransfer(gate, client, storage, System::nanoTime, System::currentTimeMillis);
@@ -92,16 +95,27 @@ public final class LeaseServiceIntegrationProbe {
             var record = client.lookupAcquisition("world", "lease", 30, "owner", 2);
             check(record.epoch() == 1 && record.generation() == 0);
             transfer.prepare(acquisition, initial, archiveA, preparedA, "drive-test-token");
+            Files.writeString(preparedA.resolve("session.lock"), "lock");
             check(gate.beginHosting(acquisition.attempt(), System.nanoTime(), System.currentTimeMillis()));
             check(coordinator.renew(acquisition));
-            long number = client.endpointRevision("world", "lease", 1, 2).revision();
-            client.updateEndpoint("world", "lease", 1, number, "test.e4mc.link", 2);
+            relayExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
+            var relayReady = new CompletableFuture<Void>();
+            var relayFailure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            var publisher = new RelayPublisher(client, acquisition, gate, relayExecutor, () -> relayReady.complete(null), relayFailure::set);
+            var relayToken = new Object();
+            publisher.opened(relayToken);
+            publisher.assigned(relayToken, "test.us.e4mc.link");
+            relayReady.get(10, TimeUnit.SECONDS);
+            check(relayFailure.get() == null);
             var endpoint = client.endpoint("world", 2);
             var reconnect = new ReconnectController();
             var session = reconnect.start("world", 1, System.nanoTime());
             check(reconnect.connect(session, endpoint, System.nanoTime(), System.currentTimeMillis()) != null);
             Files.writeString(preparedA.resolve("level.dat"), "progress");
             check(gate.beginGracefulStop(acquisition.attempt(), System.nanoTime(), System.currentTimeMillis()));
+            publisher.closed(relayToken);
+            CompletableFuture.runAsync(() -> { }, relayExecutor).get(10, TimeUnit.SECONDS);
+            check(relayFailure.get() == null);
             // The server stop is simulated here; Minecraft itself is not launched by this test.
             try { transfer.publishAfterStopped(acquisition, preparedA, finalArchive, journal, "op", "folder", "drive-test-token"); throw new AssertionError("lost commit reply was accepted"); }
             catch (java.io.IOException expected) { }
@@ -119,6 +133,7 @@ public final class LeaseServiceIntegrationProbe {
             check(client.snapshot("world").generation() == 1);
             var nextTransfer = new SharedWorldTransfer(nextGate, client, storage, System::nanoTime, System::currentTimeMillis);
             nextTransfer.prepare(nextAcquisition, null, archiveB, preparedB, "drive-test-token");
+            Files.writeString(preparedB.resolve("session.lock"), "lock");
             check(Files.readString(preparedB.resolve("level.dat")).equals("progress"));
             check(nextGate.beginHosting(nextAcquisition.attempt(), System.nanoTime(), System.currentTimeMillis()));
             Files.writeString(preparedB.resolve("level.dat"), "progress-2");
@@ -144,15 +159,19 @@ public final class LeaseServiceIntegrationProbe {
             catch (java.io.IOException expected) { }
             System.out.println("PASS: Java HTTPS client to local workerd and D1");
         } finally {
+            if (relayExecutor != null) relayExecutor.shutdownNow();
             if (bridge != null) {
                 bridge.getOutputStream().close();
                 if (!bridge.waitFor(10, TimeUnit.SECONDS)) bridge.destroyForcibly();
             }
             Files.deleteIfExists(initial.resolve("level.dat"));
+            Files.deleteIfExists(initial.resolve("session.lock"));
             Files.deleteIfExists(initial);
             Files.deleteIfExists(preparedA.resolve("level.dat"));
+            Files.deleteIfExists(preparedA.resolve("session.lock"));
             Files.deleteIfExists(preparedA);
             Files.deleteIfExists(preparedB.resolve("level.dat"));
+            Files.deleteIfExists(preparedB.resolve("session.lock"));
             Files.deleteIfExists(preparedB);
             Files.deleteIfExists(archiveA);
             Files.deleteIfExists(finalArchive);

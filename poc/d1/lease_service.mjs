@@ -36,14 +36,14 @@ async function readJson(request) {
 
 export function createLeaseService(sql, verifyObject = verifyDriveObject) {
   if (!sql?.acquire || !sql?.renew || !sql?.acquireStatus || !sql?.endpointUpdate || !sql?.endpointStatus || !sql?.endpointRevision
-      || !sql?.commit || !sql?.commitStatus || !sql?.snapshotStatus || !sql?.release || !sql?.releaseStatus)
+      || !sql?.commit || !sql?.commitStatus || !sql?.snapshotStatus || !sql?.release || !sql?.releaseStatus || !sql?.abort || !sql?.abortStatus || !sql?.hostStatus)
     throw new Error('missing SQL');
   return {
     async fetch(request, env) {
       if (request.method !== 'POST') return json({ error: 'not found' }, 404);
       const route = new URL(request.url).pathname;
       if (!['/acquire', '/renew', '/acquire-status', '/endpoint-update', '/endpoint-status', '/endpoint-revision',
-        '/commit', '/commit-status', '/snapshot-status', '/release', '/release-status'].includes(route))
+        '/commit', '/commit-status', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status'].includes(route))
         return json({ error: 'not found' }, 404);
       const auth = request.headers.get('Authorization') || '';
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -52,11 +52,11 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       try { body = await readJson(request); } catch { return json({ error: 'invalid request' }, 400); }
       if (!body || Array.isArray(body) || typeof body !== 'object' || !identifier(body.world))
         return json({ error: 'invalid request' }, 400);
-      if (!['/endpoint-status', '/snapshot-status'].includes(route) && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
+      if (!['/endpoint-status', '/snapshot-status', '/host-status'].includes(route) && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
       if (['/acquire', '/renew', '/acquire-status'].includes(route)
           && (!Number.isSafeInteger(body.duration) || body.duration < 1 || body.duration > 300))
         return json({ error: 'invalid request' }, 400);
-      if (['/renew', '/endpoint-update', '/endpoint-revision', '/commit', '/commit-status', '/release', '/release-status'].includes(route)
+      if (['/renew', '/endpoint-update', '/endpoint-revision', '/commit', '/commit-status', '/release', '/release-status', '/abort'].includes(route)
           && (!Number.isSafeInteger(body.epoch) || body.epoch < 1))
         return json({ error: 'invalid request' }, 400);
       if (route === '/endpoint-update' && (!Number.isSafeInteger(body.revision) || body.revision < 0
@@ -71,11 +71,26 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       if (['/release', '/release-status'].includes(route) && (!identifier(body.operation)
           || !Number.isSafeInteger(body.resultGeneration) || body.resultGeneration < 1))
         return json({ error: 'invalid request' }, 400);
+      if (route === '/abort' && (!Number.isSafeInteger(body.baseGeneration) || body.baseGeneration < 0))
+        return json({ error: 'invalid request' }, 400);
       // A high-entropy bearer token identifies a single owner in a single world.
       // The experiment does not implement provisioning, rotation, or revocation.
       const tokenHash = await digestToken(token);
       const member = env.MEMBERS.find(item => item.world === body.world && sameHash(item.tokenHash, tokenHash));
       if (!member || !identifier(member.owner)) return json({ error: 'unauthorized' }, 401);
+      if (route === '/host-status') {
+        const status = await env.DB.prepare(sql.hostStatus).bind(body.world).first();
+        return status ? json(status) : json({ error: 'unknown world' }, 404);
+      }
+      if (route === '/abort') {
+        const find = () => env.DB.prepare(sql.abortStatus).bind(body.world, body.lease).first();
+        const matches = row => row && row.owner === member.owner && row.epoch === body.epoch && row.base_generation === body.baseGeneration;
+        let receipt = await find();
+        if (receipt) return matches(receipt) ? json(receipt) : json({ error: 'abort conflict' }, 409);
+        await env.DB.prepare(sql.abort).bind(body.world, member.owner, body.lease, body.epoch, body.baseGeneration).all();
+        receipt = await find();
+        return matches(receipt) ? json(receipt) : json({ error: 'lease conflict' }, 409);
+      }
       if (route === '/snapshot-status') {
         const snapshot = await env.DB.prepare(sql.snapshotStatus).bind(body.world).first();
         return snapshot ? json(snapshot) : json({ error: 'unknown world' }, 404);

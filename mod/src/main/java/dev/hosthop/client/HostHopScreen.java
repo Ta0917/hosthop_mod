@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.ConnectScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ServerData;
@@ -30,20 +31,26 @@ public final class HostHopScreen extends Screen {
     private final AtomicLong request = new AtomicLong();
     private Component status = Component.translatable("screen.hosthop.initial");
     private Button register, authorize, join;
+    private EditBox initialWorld;
+    private boolean startedHere;
     private volatile DriveCredentialManager activeAuthorization;
 
     public HostHopScreen(Screen parent) { super(Component.translatable("screen.hosthop.title")); this.parent = parent; }
 
     @Override protected void init() {
         int x = width / 2 - 105;
+        initialWorld = addRenderableWidget(new EditBox(font, x, height / 2 - 58, 210, 20, Component.translatable("screen.hosthop.initial_world")));
+        initialWorld.setMaxLength(128);
+        initialWorld.setHint(Component.translatable("screen.hosthop.initial_world"));
         register = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.register"), button -> registerInvitation())
-                .bounds(x, height / 2 - 35, 210, 20).build());
+                .bounds(x, height / 2 - 32, 210, 20).build());
         authorize = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.authorize"), button -> authorizeDrive())
-                .bounds(x, height / 2 - 9, 210, 20).build());
+                .bounds(x, height / 2 - 6, 210, 20).build());
         join = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.join"), button -> joinHost())
-                .bounds(x, height / 2 + 17, 210, 20).build());
+                .bounds(x, height / 2 + 20, 210, 20).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
-                .bounds(x, height / 2 + 50, 210, 20).build());
+                .bounds(x, height / 2 + 53, 210, 20).build());
+        status = Component.translatable(HostWorldRuntime.lastStatus());
     }
 
     private void authorizeDrive() {
@@ -89,15 +96,28 @@ public final class HostHopScreen extends Screen {
 
     private void joinHost() {
         long id = request.incrementAndGet();
+        String initial = initialWorld.getValue();
         busy(true, "screen.hosthop.connecting");
         CompletableFuture.runAsync(() -> {
             try {
                 var invitation = Invitation.fromSecrets(new WindowsSecretStore(secretPath()).load());
                 var authority = new LeaseAuthorityClient(URI.create(invitation.authority()), invitation.memberToken());
-                var endpoint = authority.endpoint(invitation.world(), 2);
+                var host = authority.hostStatus(invitation.world(), 2);
                 Minecraft minecraft = Minecraft.getInstance();
                 minecraft.execute(() -> {
                     if (id != request.get() || minecraft.gui.screen() != this) return;
+                    if (!host.held()) {
+                        var vault = new WindowsSecretStore(secretPath());
+                        var authorization = new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret());
+                        var credentials = new DriveCredentialManager(vault, authorization);
+                        startedHere = HostWorldRuntime.start(invitation, credentials, initial, message -> {
+                            if (minecraft.gui.screen() == this) busy(message.equals("screen.hosthop.preparing") || message.equals("screen.hosthop.saving_world"), message);
+                        });
+                        if (!startedHere) busy(false, "screen.hosthop.already_active");
+                        return;
+                    }
+                    var endpoint = host.endpoint();
+                    if (endpoint == null) { busy(false, "screen.hosthop.host_waiting"); return; }
                     if (!endpoint.deadline().isUsable(System.nanoTime(), System.currentTimeMillis())) {
                         busy(false, "screen.hosthop.join_failed");
                         return;
@@ -114,10 +134,11 @@ public final class HostHopScreen extends Screen {
             if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(false, message);
         });
     }
-    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; join.active = !value; status = Component.translatable(message); }
+    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; join.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
 
     @Override public void onClose() {
         request.incrementAndGet();
+        if (startedHere) HostWorldRuntime.cancelPreparing();
         var authorization = activeAuthorization;
         if (authorization != null) authorization.cancelAuthorization();
         Minecraft.getInstance().gui.setScreen(parent);
@@ -125,7 +146,7 @@ public final class HostHopScreen extends Screen {
 
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-        graphics.centeredText(font, title, width / 2, height / 2 - 85, -1);
-        graphics.centeredText(font, status, width / 2, height / 2 - 60, -1);
+        graphics.centeredText(font, title, width / 2, height / 2 - 105, -1);
+        graphics.centeredText(font, status, width / 2, height / 2 - 84, -1);
     }
 }

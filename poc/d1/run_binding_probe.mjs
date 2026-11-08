@@ -23,6 +23,9 @@ const endpointStatus = load('endpoint_status.sql');
 const endpointRevision = load('endpoint_revision.sql');
 const snapshotStatus = load('snapshot_status.sql');
 const releaseStatus = load('release_status.sql');
+const abort = load('abort.sql');
+const abortStatus = load('abort_status.sql');
+const hostStatus = load('host_status.sql');
 const mf = new Miniflare(convertV4MiniflareOptions({
   modules: true,
   script: 'export default { fetch() { return new Response("local test"); } }',
@@ -111,7 +114,7 @@ try {
   const tokenHash = Array.from(new Uint8Array(tokenBytes), b => b.toString(16).padStart(2, '0')).join('');
   let objectVerified = false;
   const service = createLeaseService({ acquire, renew, acquireStatus, endpointUpdate, endpointStatus, endpointRevision,
-    commit, commitStatus, snapshotStatus, release, releaseStatus }, async () => objectVerified);
+    commit, commitStatus, snapshotStatus, release, releaseStatus, abort, abortStatus, hostStatus }, async () => objectVerified);
   const env = { DB: db, MEMBERS: [{ world: 'api-world', owner: 'api-owner', tokenHash }], WORLDS: [{ id: 'api-world', folder: 'folder' }] };
   const request = (route, body, credential = token) => service.fetch(new Request(`https://example.invalid/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
@@ -180,6 +183,19 @@ try {
   check((await request('release', { ...releaseBody, operation: 'wrong' })).status === 409, 'wrong final commit released lease');
   check((await request('release', releaseBody)).status === 200, 'verified final release failed');
   check((await request('release-status', releaseBody)).status === 200, 'release receipt unavailable');
+  await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('abort-world').run();
+  env.MEMBERS.push({ world: 'abort-world', owner: 'api-owner', tokenHash });
+  env.WORLDS.push({ id: 'abort-world', folder: 'folder' });
+  check((await (await request('host-status', { world: 'abort-world' })).json()).held === 0, 'free world not reported');
+  const abortGrant = await (await request('acquire', { world: 'abort-world', lease: 'abort-lease', duration: 120 })).json();
+  const abortBody = { world: 'abort-world', lease: 'abort-lease', epoch: abortGrant.epoch, baseGeneration: 0 };
+  check((await (await request('host-status', { world: 'abort-world' })).json()).held === 1, 'active lease not reported');
+  check((await request('abort', { ...abortBody, baseGeneration: 1 })).status === 409, 'wrong generation aborted lease');
+  check((await request('abort', abortBody)).status === 200, 'unstarted host could not release lease');
+  const replacementGrant = await request('acquire', { world: 'abort-world', lease: 'replacement', duration: 120 });
+  check(replacementGrant.status === 200, 'replacement could not acquire aborted lease');
+  check((await request('abort', abortBody)).status === 200, 'abort retry could not recover receipt');
+  check((await db.prepare('SELECT lease_id FROM worlds WHERE id=?1').bind('abort-world').first()).lease_id === 'replacement', 'abort retry released replacement');
   const originalFetch = globalThis.fetch;
   try {
     const expected = { folder: 'folder', fileId: 'drive-file', digest: 'a'.repeat(64), size: 42, accessToken: 'temporary-token' };

@@ -1,6 +1,7 @@
 {
   "screen.hosthop.title": "共有ワールド",
-  "screen.hosthop.initial": "起動中の共有ワールドに参加します",
+  "screen.hosthop.initial": "共有ワールドに参加、またはホストします",
+  "screen.hosthop.initial_world": "初期ワールドのフォルダー名（初回のみ）",
   "screen.hosthop.register": "クリップボードの招待コードを登録",
   "screen.hosthop.authorize": "Google Driveを連携",
   "screen.hosthop.authorizing": "ブラウザーで認証を完了してください",
@@ -11,5 +12,17 @@
   "screen.hosthop.registered": "招待情報を登録しました",
   "screen.hosthop.register_failed": "招待コードが無効か、別のワールドが登録済みです",
   "screen.hosthop.connecting": "現在のホストを探しています…",
-  "screen.hosthop.join_failed": "現在のホストを確認できませんでした"
+  "screen.hosthop.join_failed": "現在のホストを確認できませんでした",
+  "screen.hosthop.host_waiting": "ホストの起動中、または復旧が必要です",
+  "screen.hosthop.e4mc_required": "ホストにはe4mc 6.2.3が必要です",
+  "screen.hosthop.authorize_first": "ホストする前にGoogle Driveを連携してください",
+  "screen.hosthop.already_active": "共有ワールドの処理が進行中です",
+  "screen.hosthop.preparing": "共有ワールドを準備しています…",
+  "screen.hosthop.host_ready": "共有ワールドを公開しました",
+  "screen.hosthop.host_failed": "ホスト起動に失敗しました。ローカルのコピーは保全されています",
+  "screen.hosthop.lease_failed": "通信が途切れたためホストを停止します",
+  "screen.hosthop.recovery_required": "再ホストする前に復旧が必要です",
+  "screen.hosthop.cancelled": "ホストの起動を中止しました",
+  "screen.hosthop.saving_world": "共有ワールドを保存中です。Minecraftを閉じないでください",
+  "screen.hosthop.saved_world": "共有ワールドを保存しました"
 }

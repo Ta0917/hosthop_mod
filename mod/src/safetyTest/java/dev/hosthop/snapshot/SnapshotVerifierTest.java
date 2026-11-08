@@ -84,9 +84,14 @@ public final class SnapshotVerifierTest {
         Files.createDirectory(world);
         Files.createDirectory(nested);
         Files.writeString(world.resolve("level.dat"), "settings");
+        Files.writeString(world.resolve("session.lock"), "lock");
         Files.writeString(nested.resolve("data.dat"), "content");
         try {
-            check(SnapshotWriter.create(world, archive).files() == 2);
+            try (var locked = StoppedWorldLock.acquire(world)) {
+                try { StoppedWorldLock.acquire(world); throw new AssertionError("locked world accepted"); }
+                catch (IOException expected) { }
+                check(SnapshotWriter.create(world, archive).files() == 2);
+            }
             check(SnapshotVerifier.restore(archive, restore).files() == 2);
             check(Files.readString(restore.resolve("dimension/data.dat")).equals("content"));
             try { SnapshotWriter.create(world, archive); throw new AssertionError("backup overwritten"); }
@@ -102,6 +107,7 @@ public final class SnapshotVerifierTest {
             Files.deleteIfExists(nested.resolve("data.dat"));
             Files.deleteIfExists(nested);
             Files.deleteIfExists(world.resolve("level.dat"));
+            Files.deleteIfExists(world.resolve("session.lock"));
             Files.deleteIfExists(world);
         }
     }

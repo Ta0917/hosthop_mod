@@ -102,6 +102,8 @@ public final class SnapshotWriter {
             @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                 if (!attrs.isRegularFile() || attrs.isSymbolicLink() || attrs.isOther() || paths.size() >= SnapshotVerifier.MAX_FILES)
                     throw new IOException("Unsupported world file");
+                // Minecraft's lock is process-local coordination, not world state.
+                if (file.equals(root.resolve("session.lock"))) return FileVisitResult.CONTINUE;
                 paths.add(file);
                 return FileVisitResult.CONTINUE;
             }

@@ -83,6 +83,14 @@ public final class LeaseCoordinator {
         }
     }
 
+    /** Retryable only before the host starts; a lost acknowledgement leaves ABORTING. */
+    public boolean abortBeforeHosting(Acquisition acquisition) throws IOException, InterruptedException {
+        checkOwner(acquisition);
+        if (acquisition.epoch < 1 || !gate.beginAbort(acquisition.attempt)) return false;
+        client.abort(acquisition.world, acquisition.principal, acquisition.lease, acquisition.epoch, acquisition.generation);
+        return gate.abortConfirmed(acquisition.attempt);
+    }
+
     private void checkOwner(Acquisition acquisition) {
         if (acquisition == null || acquisition.owner != this) throw new IllegalArgumentException("Unknown acquisition");
     }

@@ -45,6 +45,18 @@ public final class LeaseCoordinatorTest {
         var mismatch = newer.beginRenewal(a, 0, 0);
         check(!newer.acceptRenewal(a, mismatch, 4, 4, ConservativeLeaseDeadline.fromGrant(0, 0, 100, 130, 2), 0, 0));
         check(newer.phase() == LocalHostGate.Phase.STOP_REQUIRED);
+        var abortGate = new LocalHostGate();
+        var abortCoordinator = new LeaseCoordinator(abortGate, client, () -> 0, () -> 0);
+        var abortAcquisition = abortCoordinator.begin("world", "lease", "owner", 30, 2);
+        response.set("{\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}");
+        check(abortCoordinator.acquire(abortAcquisition));
+        response.set(null);
+        try { abortCoordinator.abortBeforeHosting(abortAcquisition); throw new AssertionError(); } catch (IOException expected) { }
+        check(abortGate.phase() == LocalHostGate.Phase.ABORTING);
+        check(!abortGate.beginHosting(abortAcquisition.attempt(), 0, 0));
+        response.set("{\"world_id\":\"world\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"base_generation\":3}");
+        check(abortCoordinator.abortBeforeHosting(abortAcquisition));
+        check(abortGate.phase() == LocalHostGate.Phase.IDLE);
         System.out.println("LeaseCoordinator safety checks passed");
     }
 

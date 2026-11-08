@@ -32,9 +32,9 @@ const mf = new Miniflare(convertV4MiniflareOptions({
 const db = await mf.getD1Database('DB');
 await db.batch(schema.map(statement => db.prepare(statement)));
 await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('world').run();
-let dropFirstAcquisitionReply = true;
-let dropFirstCommitReply = true;
-let dropFirstReleaseReply = true;
+let dropFirstAcquisitionReply = !process.env.HOSTHOP_TEST_NO_DROPS;
+let dropFirstCommitReply = !process.env.HOSTHOP_TEST_NO_DROPS;
+let dropFirstReleaseReply = !process.env.HOSTHOP_TEST_NO_DROPS;
 const server = https.createServer({ pfx: readFileSync(process.argv[3]), passphrase: 'test-password' }, async (req, res) => {
   try {
     const chunks = [];

@@ -13,7 +13,7 @@ public final class LeaseAuthorityClientTest {
                 "{\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         var client = new LeaseAuthorityClient(URI.create("https://authority.example/"), "a".repeat(43),
                 request -> {
-                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status", "/endpoint-revision", "/endpoint-update", "/commit", "/commit-status", "/snapshot-status", "/release", "/release-status").contains(request.uri().getPath()));
+                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status", "/endpoint-revision", "/endpoint-update", "/commit", "/commit-status", "/snapshot-status", "/release", "/release-status", "/abort", "/host-status").contains(request.uri().getPath()));
                     check(request.headers().firstValue("Authorization").orElseThrow().equals("Bearer " + "a".repeat(43)));
                     return reply.get();
                 }, nanos::get, millis::get);
@@ -32,6 +32,10 @@ public final class LeaseAuthorityClientTest {
         check(endpoint.epoch() == 4 && endpoint.revision() == 7 && endpoint.address().equals("example.us.e4mc.link"));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"endpoint\":\"example.evil.invalid\",\"endpoint_revision\":7,\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         expectFailure(() -> client.endpoint("world", 2));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"held\":0,\"endpoint\":null,\"endpoint_revision\":0,\"epoch\":0,\"generation\":0,\"server_now\":100,\"expires\":0}"));
+        check(!client.hostStatus("world", 2).held());
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"held\":1,\"endpoint\":null,\"endpoint_revision\":1,\"epoch\":1,\"generation\":0,\"server_now\":100,\"expires\":99}"));
+        check(client.hostStatus("world", 2).held() && client.hostStatus("world", 2).endpoint() == null);
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"endpoint_revision\":7,\"endpoint\":null,\"server_now\":100,\"expires\":130}"));
         check(client.endpointRevision("world", "lease", 4, 2).revision() == 7);
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"endpoint_revision\":8,\"endpoint\":\"example.e4mc.link\",\"server_now\":100,\"expires\":130}"));
@@ -51,6 +55,9 @@ public final class LeaseAuthorityClientTest {
         check(client.snapshot("world").object().fileId().equals("file-id"));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"world_id\":\"world\",\"operation_id\":\"op\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"result_generation\":4}"));
         check(client.release(publication).matches(publication) && client.releaseStatus(publication).matches(publication));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"world_id\":\"world\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"base_generation\":3}"));
+        client.abort("world", "owner", "lease", 4, 3);
+        expectFailure(() -> client.abort("world", "other", "lease", 4, 3));
         reply.set(new LeaseAuthorityClient.Reply(409, "{}"));
         expectFailure(() -> client.acquire("world", "lease", 30, 2));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"epoch\":5,\"generation\":3,\"server_now\":100,\"expires\":130}"));

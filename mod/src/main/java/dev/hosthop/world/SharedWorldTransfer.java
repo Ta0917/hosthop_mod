@@ -8,6 +8,7 @@ import dev.hosthop.lease.PublicationPreparation;
 import dev.hosthop.lease.PublicationRecord;
 import dev.hosthop.snapshot.SnapshotVerifier;
 import dev.hosthop.snapshot.SnapshotWriter;
+import dev.hosthop.snapshot.StoppedWorldLock;
 import dev.hosthop.storage.SnapshotStore;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -34,7 +35,7 @@ public final class SharedWorldTransfer {
         if (acquisition == null || acquisition.epoch() < 1 || acquisition.generation() < 0) throw new IllegalStateException("Lease not acquired");
         if (acquisition.generation() == 0) {
             if (initialCopy == null) throw new IOException("Initial world copy required");
-            SnapshotWriter.create(initialCopy, archive);
+            try (var lock = StoppedWorldLock.acquire(initialCopy)) { SnapshotWriter.create(initialCopy, archive); }
         } else {
             var snapshot = authority.snapshot(acquisition.world());
             if (snapshot.generation() != acquisition.generation()) throw new IOException("Snapshot generation changed");
@@ -57,7 +58,7 @@ public final class SharedWorldTransfer {
             throw new IllegalArgumentException("Invalid publication operation");
         if (!gate.serverStoppedForSnapshot(acquisition.attempt(), nanos.getAsLong(), millis.getAsLong()))
             throw new IOException("Server stop was not accepted");
-        SnapshotWriter.create(stoppedWorld, archive);
+        try (var lock = StoppedWorldLock.acquire(stoppedWorld)) { SnapshotWriter.create(stoppedWorld, archive); }
         var object = storage.upload(archive, folderId, driveToken);
         if (!gate.finalSnapshotVerified(acquisition.attempt(), acquisition.generation(), nanos.getAsLong(), millis.getAsLong()))
             throw new IOException("Lease expired before publication");

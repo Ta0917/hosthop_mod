@@ -3,6 +3,6 @@
   "minVersion": "0.8",
   "package": "dev.hosthop.relay.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": ["E4mcSessionMixin", "E4mcAssignmentMixin", "E4mcInactiveMixin"],
+  "mixins": ["E4mcSessionMixin", "E4mcAssignmentMixin", "E4mcInactiveMixin", "MinecraftServerStopMixin"],
   "injectors": { "defaultRequire": 0 }
 }

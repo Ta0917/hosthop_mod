@@ -6,7 +6,7 @@ package dev.hosthop.lease;
  * must obtain trusted evidence and enforce STOP_REQUIRED outside this class.
  */
 public final class LocalHostGate {
-    public enum Phase { IDLE, ACQUIRING, PREPARING, HOSTING, QUIESCING, SNAPSHOTTING, PUBLISHING, RELEASE_REQUIRED, STOP_REQUIRED }
+    public enum Phase { IDLE, ACQUIRING, PREPARING, ABORTING, HOSTING, QUIESCING, SNAPSHOTTING, PUBLISHING, RELEASE_REQUIRED, STOP_REQUIRED }
 
     public static final class Attempt { private Attempt() {} }
     public static final class Renewal { private Renewal() {} }
@@ -18,6 +18,7 @@ public final class LocalHostGate {
     private long epoch;
     private long generation;
     private boolean snapshotVerified;
+    private boolean everHosted;
     private boolean publicationUncertain;
     private PublicationRecord publication;
 
@@ -58,6 +59,7 @@ public final class LocalHostGate {
         this.generation = generation;
         deadline = grant;
         snapshotVerified = false;
+        everHosted = false;
         phase = Phase.PREPARING;
         return true;
     }
@@ -73,7 +75,23 @@ public final class LocalHostGate {
     public synchronized boolean beginHosting(Attempt attempt, long nowNanos, long nowMillis) {
         if (attempt == null || attempt != current || phase != Phase.PREPARING || !snapshotVerified) return false;
         if (!checkDeadline(nowNanos, nowMillis)) return false;
+        everHosted = true;
         phase = Phase.HOSTING;
+        return true;
+    }
+
+    /** Only a host which has not started may abandon an acquisition. */
+    public synchronized boolean beginAbort(Attempt attempt) {
+        if (attempt == null || attempt != current || everHosted || publicationUncertain
+                || (phase != Phase.PREPARING && phase != Phase.ABORTING && phase != Phase.STOP_REQUIRED)) return false;
+        phase = Phase.ABORTING;
+        pendingRenewal = null;
+        return true;
+    }
+
+    public synchronized boolean abortConfirmed(Attempt attempt) {
+        if (attempt == null || attempt != current || phase != Phase.ABORTING) return false;
+        clearAttempt();
         return true;
     }
 
@@ -208,6 +226,7 @@ public final class LocalHostGate {
         pendingRenewal = null;
         deadline = null;
         snapshotVerified = false;
+        everHosted = false;
         publicationUncertain = false;
         publication = null;
         phase = Phase.IDLE;

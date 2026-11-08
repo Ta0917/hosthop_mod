@@ -53,7 +53,7 @@ if (project.hasProperty('hostStopProbe')) {
     sourceSets.main.java.srcDir('../poc/host-stop/src')
     sourceSets.main.resources.srcDir('../poc/host-stop/resources')
 }
-if (project.hasProperty('hosthopUiSmoke')) {
+if (project.hasProperty('hosthopUiSmoke') || project.hasProperty('hosthopHostSmoke')) {
     sourceSets.main.java.srcDir('../poc/client-smoke/src')
 }
 
@@ -70,10 +70,16 @@ neoForge {
         client {
             client()
             if (project.hasProperty('hosthopUiSmoke')) systemProperty 'hosthop.uiSmoke', 'true'
+            if (project.hasProperty('hosthopHostSmoke')) {
+                systemProperty 'hosthop.hostSmoke', 'true'
+                systemProperty 'hosthop.testBridge', file('../poc/d1/local_https_bridge.mjs').absolutePath
+                systemProperty 'hosthop.miniflare', file('../.tools/d1-tool/node_modules/miniflare').absolutePath
+            }
             if (project.hasProperty('hosthopClientDir')) {
                 def root = file('../.tools').canonicalFile.toPath()
                 def target = file(project.property('hosthopClientDir')).canonicalFile.toPath()
-                if (!target.startsWith(root) || target == root || java.nio.file.Files.exists(target)) {
+                def prepared = project.hasProperty('hosthopHostSmoke') && java.nio.file.Files.isRegularFile(target.resolve('.hosthop-test-client'))
+                if (!target.startsWith(root) || target == root || (java.nio.file.Files.exists(target) && !prepared)) {
                     throw new GradleException('Test client directory must be new and under .tools')
                 }
                 gameDirectory = target.toFile()
@@ -319,6 +325,7 @@ tasks.register('snapshotCreateRealWorldProbe', JavaExec) {
 tasks.register('buildLeaseService', Exec) {
     commandLine 'node', file('../service/build.mjs').absolutePath
 }
+if (project.hasProperty('hosthopHostSmoke')) tasks.named('runClient') { dependsOn tasks.named('buildLeaseService') }
 tasks.register('leaseServiceIntegrationProbe', JavaExec) {
     dependsOn tasks.named('safetyTestClasses'), tasks.named('buildLeaseService')
     classpath = sourceSets.safetyTest.runtimeClasspath

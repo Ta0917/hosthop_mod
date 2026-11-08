@@ -43,6 +43,7 @@ public final class LeaseAuthorityClient {
                            ConservativeLeaseDeadline deadline) {}
     public record Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object) {}
     public record EndpointLease(long epoch, long revision, String address, ConservativeLeaseDeadline deadline) {}
+    public record HostStatus(boolean held, Endpoint endpoint) {}
     @FunctionalInterface public interface Exchange { Reply send(HttpRequest request) throws IOException, InterruptedException; }
 
     public LeaseAuthorityClient(URI base, String token) {
@@ -107,6 +108,27 @@ public final class LeaseAuthorityClient {
         }
     }
 
+    /** Distinguishes an unowned world from a held lease whose relay is not ready. */
+    public HostStatus hostStatus(String world, long marginSeconds) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID)) throw new IllegalArgumentException("Invalid world");
+        var body = new JsonObject(); body.addProperty("world", world);
+        long startNanos = nanos.getAsLong(), startMillis = millis.getAsLong();
+        var fields = post("host-status", body);
+        long held = required(fields.numbers(), "held"), epoch = required(fields.numbers(), "epoch");
+        long generation = required(fields.numbers(), "generation"), revision = required(fields.numbers(), "endpoint_revision");
+        long serverNow = required(fields.numbers(), "server_now"), expires = required(fields.numbers(), "expires");
+        if ((held != 0 && held != 1) || epoch < 0 || generation < 0 || revision < 0 || serverNow < 0)
+            throw new IOException("Invalid host status");
+        String address = fields.strings().get("endpoint");
+        if (address == null) return new HostStatus(held == 1, null);
+        if (held != 1 || epoch < 1 || !RelayAddress.valid(address)) throw new IOException("Invalid host endpoint");
+        try {
+            var deadline = ConservativeLeaseDeadline.fromGrant(startNanos, startMillis, serverNow, expires, marginSeconds);
+            if (!deadline.isUsable(nanos.getAsLong(), millis.getAsLong())) return new HostStatus(true, null);
+            return new HostStatus(true, new Endpoint(world, epoch, generation, revision, address, deadline));
+        } catch (IllegalArgumentException | ArithmeticException invalid) { throw new IOException("Invalid host status", invalid); }
+    }
+
     public EndpointLease endpointRevision(String world, String lease, long epoch, long marginSeconds) throws IOException, InterruptedException {
         return endpointUpdate("endpoint-revision", world, lease, epoch, -1, null, marginSeconds);
     }
@@ -155,6 +177,17 @@ public final class LeaseAuthorityClient {
         if (generation < 1 || size < 1 || size > 68_719_476_736L || digest == null || !digest.matches("[0-9a-f]{64}")
                 || objectId == null || !objectId.matches("[A-Za-z0-9_-]{1,200}")) throw new IOException("Invalid snapshot reference");
         return new Snapshot(generation, new GoogleDriveSnapshotStore.ObjectRef(objectId, digest, size));
+    }
+
+    public void abort(String world, String owner, String lease, long epoch, long baseGeneration) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID) || owner == null || !owner.matches(ID) || lease == null || !lease.matches(ID)
+                || epoch < 1 || baseGeneration < 0) throw new IllegalArgumentException("Invalid lease abort");
+        var body = new JsonObject();
+        body.addProperty("world", world); body.addProperty("lease", lease); body.addProperty("epoch", epoch); body.addProperty("baseGeneration", baseGeneration);
+        var fields = post("abort", body);
+        if (!world.equals(fields.strings().get("world_id")) || !owner.equals(fields.strings().get("owner"))
+                || !lease.equals(fields.strings().get("lease_id")) || epoch != required(fields.numbers(), "epoch")
+                || baseGeneration != required(fields.numbers(), "base_generation")) throw new IOException("Abort receipt mismatch");
     }
 
     /** Publish only after the server is stopped and the uploaded object has been verified. */
@@ -274,7 +307,7 @@ public final class LeaseAuthorityClient {
                 String name = reader.nextName();
                 if (!names.add(name)) throw new IOException("Duplicate response field");
                 if (name.equals("epoch") || name.equals("generation") || name.equals("base_generation")
-                        || name.equals("duration_seconds") || name.equals("active") || name.equals("endpoint_revision")
+                        || name.equals("duration_seconds") || name.equals("active") || name.equals("held") || name.equals("endpoint_revision")
                         || name.equals("previous_generation") || name.equals("result_generation") || name.equals("object_size")
                         || name.equals("server_now") || name.equals("expires")) {
                     if (reader.peek() != JsonToken.NUMBER) throw new IOException("Invalid response field");

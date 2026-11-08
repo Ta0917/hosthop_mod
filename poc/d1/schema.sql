@@ -35,6 +35,25 @@ BEGIN
     SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'stale lease grant') END;
 END;
 
+-- Only for a host that has not begun serving or published an endpoint.
+CREATE TABLE lease_aborts (
+    world_id TEXT NOT NULL, lease_id TEXT NOT NULL, owner TEXT NOT NULL,
+    epoch INTEGER NOT NULL, base_generation INTEGER NOT NULL,
+    PRIMARY KEY (world_id, lease_id)
+);
+
+CREATE TRIGGER apply_lease_abort AFTER INSERT ON lease_aborts
+BEGIN
+    UPDATE worlds SET owner = NULL, lease_id = NULL, expires = 0,
+      endpoint = NULL, endpoint_revision = endpoint_revision + 1
+    WHERE id = NEW.world_id AND owner = NEW.owner AND lease_id = NEW.lease_id
+      AND epoch = NEW.epoch AND generation = NEW.base_generation AND endpoint IS NULL
+      AND EXISTS (SELECT 1 FROM lease_grants g WHERE g.world_id = NEW.world_id
+        AND g.lease_id = NEW.lease_id AND g.owner = NEW.owner AND g.epoch = NEW.epoch
+        AND g.base_generation = NEW.base_generation);
+    SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'stale abort') END;
+END;
+
 -- A release is recorded only after a matching final commit. The record makes
 -- retries distinguishable from a later owner's lease, without releasing it.
 CREATE TABLE lease_releases (

@@ -1,6 +1,7 @@
 {
   "screen.hosthop.title": "Shared World",
-  "screen.hosthop.initial": "Join an active shared-world host",
+  "screen.hosthop.initial": "Join or start the shared world",
+  "screen.hosthop.initial_world": "Initial world folder (first host only)",
   "screen.hosthop.register": "Register invitation from clipboard",
   "screen.hosthop.authorize": "Authorize Google Drive",
   "screen.hosthop.authorizing": "Finish authorization in your browser",
@@ -11,5 +12,17 @@
   "screen.hosthop.registered": "Invitation registered",
   "screen.hosthop.register_failed": "Invitation invalid or another world is already registered",
   "screen.hosthop.connecting": "Looking for the current host...",
-  "screen.hosthop.join_failed": "Could not find or reach a current host"
+  "screen.hosthop.join_failed": "Could not find or reach a current host",
+  "screen.hosthop.host_waiting": "A host is starting or needs recovery",
+  "screen.hosthop.e4mc_required": "e4mc 6.2.3 is required to host",
+  "screen.hosthop.authorize_first": "Authorize Google Drive before hosting",
+  "screen.hosthop.already_active": "A shared-world session is already active",
+  "screen.hosthop.preparing": "Preparing the shared world...",
+  "screen.hosthop.host_ready": "Shared world is open",
+  "screen.hosthop.host_failed": "Host startup failed; the local copy was kept",
+  "screen.hosthop.lease_failed": "Connection lost; the shared host is stopping",
+  "screen.hosthop.recovery_required": "Recovery is required before hosting again",
+  "screen.hosthop.cancelled": "Host startup cancelled",
+  "screen.hosthop.saving_world": "Saving the shared world; keep Minecraft open",
+  "screen.hosthop.saved_world": "Shared world saved successfully"
 }
