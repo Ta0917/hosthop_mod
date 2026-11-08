@@ -9,7 +9,8 @@ const out = join(here, 'build');
 const mappings = { acquire: 'acquire.sql', renew: 'renew.sql', acquireStatus: 'acquire_status.sql',
   endpointUpdate: 'endpoint_update.sql', endpointStatus: 'endpoint_status.sql', endpointRevision: 'endpoint_revision.sql',
   commit: 'commit.sql', commitStatus: 'commit_status.sql', snapshotStatus: 'snapshot_status.sql', release: 'release.sql', releaseStatus: 'release_status.sql',
-  abort: 'abort.sql', abortStatus: 'abort_status.sql', hostStatus: 'host_status.sql' };
+  abort: 'abort.sql', abortStatus: 'abort_status.sql', hostStatus: 'host_status.sql',
+  cancelAcquisition: 'cancel_acquisition.sql', cancelAcquisitionStatus: 'cancel_acquisition_status.sql' };
 const sql = Object.fromEntries(await Promise.all(Object.entries(mappings).map(async ([key, file]) => [key, await readFile(join(source, file), 'utf8')])));
 await mkdir(out, { recursive: true });
 await writeFile(join(out, 'sql.mjs'), `export default ${JSON.stringify(sql)};\n`);

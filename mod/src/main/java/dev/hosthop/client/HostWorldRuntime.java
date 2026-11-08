@@ -123,9 +123,9 @@ public final class HostWorldRuntime {
             pendingPath = config.resolve("pending-host.dat");
             var pending = new WindowsSecretStore(pendingPath);
             if (pending.exists()) {
-                // Only "preparing" is written before Minecraft can be launched. A later
+                // These stages are written before Minecraft can be launched. A later
                 // stage may contain unsaved play and must never be discarded this way.
-                if (!PendingHostRecovery.abortUnstarted(pending.load(), invitation.world(), invitation.principal(), authority::abort)) {
+                if (!PendingHostRecovery.abortUnstarted(pending.load(), invitation.world(), invitation.principal(), authority::abort, authority::cancelAcquisition)) {
                     tell("screen.hosthop.recovery_required"); cleanup(); return;
                 }
                 Files.delete(pendingPath);

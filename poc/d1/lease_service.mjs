@@ -36,14 +36,15 @@ async function readJson(request) {
 
 export function createLeaseService(sql, verifyObject = verifyDriveObject) {
   if (!sql?.acquire || !sql?.renew || !sql?.acquireStatus || !sql?.endpointUpdate || !sql?.endpointStatus || !sql?.endpointRevision
-      || !sql?.commit || !sql?.commitStatus || !sql?.snapshotStatus || !sql?.release || !sql?.releaseStatus || !sql?.abort || !sql?.abortStatus || !sql?.hostStatus)
+      || !sql?.commit || !sql?.commitStatus || !sql?.snapshotStatus || !sql?.release || !sql?.releaseStatus || !sql?.abort || !sql?.abortStatus || !sql?.hostStatus
+      || !sql?.cancelAcquisition || !sql?.cancelAcquisitionStatus)
     throw new Error('missing SQL');
   return {
     async fetch(request, env) {
       if (request.method !== 'POST') return json({ error: 'not found' }, 404);
       const route = new URL(request.url).pathname;
       if (!['/acquire', '/renew', '/acquire-status', '/endpoint-update', '/endpoint-status', '/endpoint-revision',
-        '/commit', '/commit-status', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status'].includes(route))
+        '/commit', '/commit-status', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/cancel-acquisition'].includes(route))
         return json({ error: 'not found' }, 404);
       const auth = request.headers.get('Authorization') || '';
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -78,6 +79,23 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       const tokenHash = await digestToken(token);
       const member = env.MEMBERS.find(item => item.world === body.world && sameHash(item.tokenHash, tokenHash));
       if (!member || !identifier(member.owner)) return json({ error: 'unauthorized' }, 401);
+      if (route === '/cancel-acquisition') {
+        // The caller must have stopped its local process and never started the server.
+        // Serial D1 writes fence both already-granted and delayed acquire requests.
+        await env.DB.prepare(sql.cancelAcquisition).bind(body.world, member.owner, body.lease).run();
+        const cancelled = await env.DB.prepare(sql.cancelAcquisitionStatus).bind(body.world, body.lease).first();
+        if (cancelled) return cancelled.owner === member.owner ? json(cancelled) : json({ error: 'lease conflict' }, 409);
+        const grant = await env.DB.prepare(sql.acquireStatus).bind(body.world, body.lease).first();
+        if (!grant || grant.owner !== member.owner) return json({ error: 'lease conflict' }, 409);
+        const findAbort = () => env.DB.prepare(sql.abortStatus).bind(body.world, body.lease).first();
+        let aborted = await findAbort();
+        if (!aborted) {
+          await env.DB.prepare(sql.abort).bind(body.world, member.owner, body.lease, grant.epoch, grant.base_generation).run();
+          aborted = await findAbort();
+        }
+        return aborted && aborted.owner === member.owner && aborted.epoch === grant.epoch && aborted.base_generation === grant.base_generation
+          ? json({ world_id: body.world, owner: member.owner, lease_id: body.lease }) : json({ error: 'lease conflict' }, 409);
+      }
       if (route === '/host-status') {
         const status = await env.DB.prepare(sql.hostStatus).bind(body.world).first();
         return status ? json(status) : json({ error: 'unknown world' }, 404);

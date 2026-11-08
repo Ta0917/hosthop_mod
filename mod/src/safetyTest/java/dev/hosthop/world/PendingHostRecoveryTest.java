@@ -15,21 +15,24 @@ public final class PendingHostRecoveryTest {
             check(world.equals("world") && owner.equals("owner") && lease.equals(id) && epoch == 4 && generation == 2);
             calls.incrementAndGet();
         };
-        check(PendingHostRecovery.abortUnstarted(pending, "world", "owner", abort));
-        for (String stage : new String[]{"acquiring", "starting", "hosting"}) {
+        PendingHostRecovery.Cancel cancel = (world, owner, lease) -> { check(lease.equals(id)); calls.incrementAndGet(); };
+        check(PendingHostRecovery.abortUnstarted(pending, "world", "owner", abort, cancel));
+        pending.put("stage", "acquiring");
+        check(PendingHostRecovery.abortUnstarted(pending, "world", "owner", abort, cancel));
+        for (String stage : new String[]{"starting", "hosting"}) {
             pending.put("stage", stage);
-            check(!PendingHostRecovery.abortUnstarted(pending, "world", "owner", abort));
+            check(!PendingHostRecovery.abortUnstarted(pending, "world", "owner", abort, cancel));
         }
         pending.put("stage", "preparing");
-        check(!PendingHostRecovery.abortUnstarted(pending, "other", "owner", abort));
+        check(!PendingHostRecovery.abortUnstarted(pending, "other", "owner", abort, cancel));
         pending.put("generation", "-1");
-        check(!PendingHostRecovery.abortUnstarted(pending, "world", "owner", abort));
+        check(!PendingHostRecovery.abortUnstarted(pending, "world", "owner", abort, cancel));
         pending.put("generation", "2");
         try {
-            PendingHostRecovery.abortUnstarted(pending, "world", "owner", (w, o, l, e, g) -> { throw new IOException("offline"); });
+            PendingHostRecovery.abortUnstarted(pending, "world", "owner", (w, o, l, e, g) -> { throw new IOException("offline"); }, cancel);
             throw new AssertionError("Failed abort must not be treated as recovered");
         } catch (IOException expected) { }
-        check(calls.get() == 1);
+        check(calls.get() == 2);
         System.out.println("Pending pre-launch recovery checks passed");
     }
     private static void check(boolean value) { if (!value) throw new AssertionError(); }

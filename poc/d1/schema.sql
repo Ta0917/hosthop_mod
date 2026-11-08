@@ -25,6 +25,18 @@ CREATE TABLE lease_grants (
     UNIQUE (world_id, epoch)
 );
 
+-- A cancelled request ID can never be granted, even if its request arrives late.
+CREATE TABLE lease_cancellations (
+    world_id TEXT NOT NULL, lease_id TEXT NOT NULL, owner TEXT NOT NULL,
+    PRIMARY KEY (world_id, lease_id)
+);
+
+CREATE TRIGGER reject_cancelled_grant BEFORE INSERT ON lease_grants
+WHEN EXISTS (SELECT 1 FROM lease_cancellations c WHERE c.world_id = NEW.world_id AND c.lease_id = NEW.lease_id)
+BEGIN
+    SELECT RAISE(IGNORE);
+END;
+
 CREATE TRIGGER apply_lease_grant AFTER INSERT ON lease_grants
 BEGIN
     UPDATE worlds SET owner = NEW.owner, lease_id = NEW.lease_id,

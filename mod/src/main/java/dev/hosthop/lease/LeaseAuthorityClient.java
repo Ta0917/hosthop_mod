@@ -190,6 +190,17 @@ public final class LeaseAuthorityClient {
                 || baseGeneration != required(fields.numbers(), "base_generation")) throw new IOException("Abort receipt mismatch");
     }
 
+    /** Fences a delayed acquisition or aborts its unstarted grant; safe to retry. */
+    public void cancelAcquisition(String world, String owner, String lease) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID) || owner == null || !owner.matches(ID) || lease == null || !lease.matches(ID))
+            throw new IllegalArgumentException("Invalid acquisition cancellation");
+        var body = new JsonObject();
+        body.addProperty("world", world); body.addProperty("lease", lease);
+        var fields = post("cancel-acquisition", body);
+        if (!world.equals(fields.strings().get("world_id")) || !owner.equals(fields.strings().get("owner"))
+                || !lease.equals(fields.strings().get("lease_id"))) throw new IOException("Cancellation receipt mismatch");
+    }
+
     /** Publish only after the server is stopped and the uploaded object has been verified. */
     public PublicationRecord commit(PublicationRecord operation, String driveToken) throws IOException, InterruptedException {
         if (driveToken == null || driveToken.isBlank() || driveToken.length() > 2048 || driveToken.chars().anyMatch(Character::isISOControl))

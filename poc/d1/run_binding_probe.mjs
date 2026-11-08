@@ -26,6 +26,8 @@ const releaseStatus = load('release_status.sql');
 const abort = load('abort.sql');
 const abortStatus = load('abort_status.sql');
 const hostStatus = load('host_status.sql');
+const cancelAcquisition = load('cancel_acquisition.sql');
+const cancelAcquisitionStatus = load('cancel_acquisition_status.sql');
 const mf = new Miniflare(convertV4MiniflareOptions({
   modules: true,
   script: 'export default { fetch() { return new Response("local test"); } }',
@@ -114,11 +116,27 @@ try {
   const tokenHash = Array.from(new Uint8Array(tokenBytes), b => b.toString(16).padStart(2, '0')).join('');
   let objectVerified = false;
   const service = createLeaseService({ acquire, renew, acquireStatus, endpointUpdate, endpointStatus, endpointRevision,
-    commit, commitStatus, snapshotStatus, release, releaseStatus, abort, abortStatus, hostStatus }, async () => objectVerified);
+    commit, commitStatus, snapshotStatus, release, releaseStatus, abort, abortStatus, hostStatus, cancelAcquisition, cancelAcquisitionStatus }, async () => objectVerified);
   const env = { DB: db, MEMBERS: [{ world: 'api-world', owner: 'api-owner', tokenHash }], WORLDS: [{ id: 'api-world', folder: 'folder' }] };
   const request = (route, body, credential = token) => service.fetch(new Request(`https://example.invalid/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
   }), env);
+  await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('cancel-world').run();
+  env.MEMBERS.push({ world: 'cancel-world', owner: 'api-owner', tokenHash });
+  const cancelled = { world: 'cancel-world', lease: 'cancel-first', duration: 120 };
+  check((await request('cancel-acquisition', cancelled)).status === 200, 'ungranted acquisition could not be cancelled');
+  check((await request('acquire', cancelled)).status === 409, 'delayed cancelled acquisition was granted');
+  check((await request('cancel-acquisition', cancelled)).status === 200, 'cancellation retry failed');
+  const granted = { ...cancelled, lease: 'grant-first' };
+  check((await request('acquire', granted)).status === 200, 'test acquisition failed');
+  check((await request('cancel-acquisition', granted)).status === 200, 'unstarted grant could not be cancelled');
+  check((await request('cancel-acquisition', granted)).status === 200, 'grant cancellation retry failed');
+  const raced = { ...cancelled, lease: 'race' };
+  const [raceCancel, raceGrant] = await Promise.all([request('cancel-acquisition', raced), request('acquire', raced)]);
+  check([200, 409].includes(raceGrant.status) && raceCancel.status === 200, 'concurrent cancellation failed');
+  check((await request('cancel-acquisition', raced)).status === 200, 'concurrent cancellation retry failed');
+  check((await request('acquire', raced)).status === 409, 'cancelled race could acquire later');
+  check((await request('acquire', { ...cancelled, lease: 'next-grant' })).status === 200, 'cancelled grant blocked successor');
   const grantBody = { world: 'api-world', lease: 'api-lease', duration: 120, owner: 'forged-owner' };
   check((await request('acquire', grantBody, 'b'.repeat(43))).status === 401, 'invalid token accepted');
   check((await request('acquire', { ...grantBody, world: 'world' })).status === 401, 'token used for different world');
