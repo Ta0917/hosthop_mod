@@ -84,6 +84,9 @@ neoForge {
                 if (project.hasProperty('e4mcDropProbe')) {
                     systemProperty 'hosthop.e4mcDropProbe', 'true'
                 }
+                if (project.hasProperty('e4mcStaleProbe')) {
+                    systemProperty 'hosthop.e4mcStaleProbe', 'true'
+                }
                 if (project.hasProperty('e4mcLocalOnly')) {
                     systemProperty 'hosthop.e4mcLocalOnly', 'true'
                 }
@@ -198,6 +201,20 @@ publishing {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
 }
+
+sourceSets {
+    safetyTest {
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
+tasks.register('safetyCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.relay.SessionAddressRegistryTest'
+}
+tasks.named('check') { dependsOn tasks.named('safetyCheck') }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {

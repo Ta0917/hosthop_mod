@@ -18,6 +18,9 @@ public abstract class AssignmentMixin {
         if (!field.trySetAccessible()) throw new IllegalStateException("Cannot inspect assignment");
         Object value = field.get(message);
         if (!(value instanceof String address) || address.isBlank()) throw new IllegalStateException("Empty assignment");
-        CapturedEndpoint.address = address;
+        Object session = CapturedEndpoint.outer(CapturedEndpoint.outer(this, "this$1"), "this$0");
+        if (CapturedEndpoint.publish(session, address)) {
+            System.out.println("HOSTHOP_PROBE assignment accepted for current session");
+        }
     }
 }

@@ -57,11 +57,11 @@ public final class E4mcRelayProbe {
                 Thread.sleep(100);
             }
             System.out.println("HOSTHOP_PROBE final session state=" + state);
-            System.out.println("HOSTHOP_PROBE assignment captured=" + (CapturedEndpoint.address != null));
-            if (!state.equals("STARTED") || CapturedEndpoint.address == null) throw new IllegalStateException("Relay or assignment capture failed");
+            System.out.println("HOSTHOP_PROBE assignment captured=" + (CapturedEndpoint.address() != null));
+            if (!state.equals("STARTED") || CapturedEndpoint.address() == null) throw new IllegalStateException("Relay or assignment capture failed");
             waitForStatus(server);
             int protocol = SharedConstants.getCurrentVersion().protocolVersion();
-            ping(CapturedEndpoint.address, 25565, protocol);
+            ping(CapturedEndpoint.address(), 25565, protocol);
             System.out.println("HOSTHOP_PROBE Minecraft status response verified=true");
             int holdSeconds = Math.max(0, Math.min(60, Integer.getInteger("hosthop.e4mcHoldSeconds", 0)));
             if (holdSeconds > 0) {
@@ -70,7 +70,7 @@ public final class E4mcRelayProbe {
                 System.out.println("HOSTHOP_PROBE monitoring interval ended");
             }
             if (Boolean.getBoolean("hosthop.e4mcDropProbe")) {
-                String guestHost = CapturedEndpoint.address;
+                String guestHost = CapturedEndpoint.address();
                 splitPing(guestHost, 25565, protocol);
                 System.out.println("HOSTHOP_PROBE split handshake control verified=true");
                 byte[] handshake = statusHandshake(guestHost, 25565, protocol);
@@ -85,16 +85,43 @@ public final class E4mcRelayProbe {
                     } catch (SocketTimeoutException expected) {
                         System.out.println("HOSTHOP_PROBE guest stream initially open=true");
                     }
+                    Object laterSession = null;
+                    if (Boolean.getBoolean("hosthop.e4mcStaleProbe")) {
+                        // Construct an unstarted e4mc session. It opens no connection,
+                        // but exercises the actual constructor and stop mixins.
+                        laterSession = session.getClass().getConstructor(io.netty.channel.ChannelHandler.class,
+                                io.netty.channel.EventLoopGroup.class).newInstance(null, null);
+                        if (!CapturedEndpoint.publish(laterSession, "test.invalid") ||
+                                CapturedEndpoint.publish(session, "stale.invalid")) {
+                            throw new IllegalStateException("Stale assignment was not fenced");
+                        }
+                        System.out.println("HOSTHOP_PROBE old assignment rejected after replacement=true");
+                    }
                     var channelField = session.getClass().getDeclaredField("quicChannel");
                     if (!channelField.trySetAccessible()) throw new IllegalStateException("Cannot inspect relay channel");
                     Object channel = channelField.get(session);
                     if (!(channel instanceof io.netty.channel.Channel relay)) throw new IllegalStateException("Relay channel unavailable");
                     relay.close().syncUninterruptibly();
-                    long dropDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-                    while (CapturedEndpoint.address != null && System.nanoTime() < dropDeadline) Thread.sleep(50);
-                    boolean cleared = CapturedEndpoint.address == null;
-                    System.out.println("HOSTHOP_PROBE assignment absent after forced channel close=" + cleared);
-                    if (!cleared) throw new IllegalStateException("Stale assignment after channel close");
+                    if (laterSession == null) {
+                        long dropDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                        while (CapturedEndpoint.address() != null && System.nanoTime() < dropDeadline) Thread.sleep(50);
+                        boolean cleared = CapturedEndpoint.address() == null;
+                        System.out.println("HOSTHOP_PROBE assignment absent after forced channel close=" + cleared);
+                        if (!cleared) throw new IllegalStateException("Stale assignment after channel close");
+                    } else {
+                        // Wait for the old channel's inactive callback before checking.
+                        long inactiveDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                        while (!String.valueOf(session.getClass().getField("state").get(session)).equals("STOPPED") &&
+                                System.nanoTime() < inactiveDeadline) Thread.sleep(50);
+                        if (!String.valueOf(session.getClass().getField("state").get(session)).equals("STOPPED")) {
+                            throw new IllegalStateException("Old channel did not become inactive");
+                        }
+                        boolean protectedNew = "test.invalid".equals(CapturedEndpoint.address());
+                        System.out.println("HOSTHOP_PROBE old channel close preserved new assignment=" + protectedNew);
+                        if (!protectedNew) throw new IllegalStateException("Old channel invalidated new session");
+                        laterSession.getClass().getMethod("stop").invoke(laterSession);
+                        if (CapturedEndpoint.address() != null) throw new IllegalStateException("New session stop left assignment");
+                    }
                     boolean statusAfterClose;
                     guest.setSoTimeout(8000);
                     try {
@@ -123,7 +150,7 @@ public final class E4mcRelayProbe {
                         if (state.equals("STOPPED")) break;
                         Thread.sleep(100);
                     } while (System.nanoTime() < deadline);
-                    boolean stopped = state.equals("STOPPED") && CapturedEndpoint.address == null;
+                    boolean stopped = state.equals("STOPPED") && CapturedEndpoint.address() == null;
                     System.out.println("HOSTHOP_PROBE stopped and assignment absent=" + stopped);
                     if (!stopped && failure == null) failure = new IllegalStateException("Session did not stop cleanly");
                 } catch (Throwable e) {

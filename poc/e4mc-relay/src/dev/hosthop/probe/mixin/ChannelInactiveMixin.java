@@ -10,8 +10,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(targets = "link.e4mc.QuiclimeSession$1", remap = false)
 public abstract class ChannelInactiveMixin {
     @Inject(method = "channelInactive", at = @At("HEAD"), remap = false)
-    private void hosthop$clearOnInactive(ChannelHandlerContext context, CallbackInfo ci) {
-        CapturedEndpoint.address = null;
-        System.out.println("HOSTHOP_PROBE assignment cleared on channel inactive");
+    private void hosthop$clearOnInactive(ChannelHandlerContext context, CallbackInfo ci) throws ReflectiveOperationException {
+        Object session = CapturedEndpoint.outer(this, "this$0");
+        if (CapturedEndpoint.end(session)) System.out.println("HOSTHOP_PROBE assignment cleared on channel inactive");
     }
 }
