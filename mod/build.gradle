@@ -53,7 +53,7 @@ if (project.hasProperty('hostStopProbe')) {
     sourceSets.main.java.srcDir('../poc/host-stop/src')
     sourceSets.main.resources.srcDir('../poc/host-stop/resources')
 }
-if (project.hasProperty('hosthopUiSmoke') || project.hasProperty('hosthopHostSmoke')) {
+if (project.hasProperty('hosthopUiSmoke') || project.hasProperty('hosthopHostSmoke') || project.hasProperty('hosthopWorldSmoke')) {
     sourceSets.main.java.srcDir('../poc/client-smoke/src')
 }
 
@@ -70,10 +70,12 @@ neoForge {
         client {
             client()
             if (project.hasProperty('hosthopUiSmoke')) systemProperty 'hosthop.uiSmoke', 'true'
+            if (project.hasProperty('hosthopWorldSmoke')) systemProperty 'hosthop.worldSmoke', 'true'
             if (project.hasProperty('hosthopHostSmoke')) {
                 systemProperty 'hosthop.hostSmoke', 'true'
                 systemProperty 'hosthop.testBridge', file('../poc/d1/local_https_bridge.mjs').absolutePath
                 systemProperty 'hosthop.miniflare', file('../.tools/d1-tool/node_modules/miniflare').absolutePath
+                if (project.hasProperty('hosthopInterruptedSmoke')) systemProperty 'hosthop.interruptedSmoke', 'true'
                 if (project.hasProperty('hosthopRealSmoke')) {
                     systemProperty 'hosthop.realSmoke', 'true'
                     systemProperty 'hosthop.realInvite', file('../.tools/test-provision-output/invite-test_owner.txt').absolutePath
@@ -83,7 +85,7 @@ neoForge {
             if (project.hasProperty('hosthopClientDir')) {
                 def root = file('../.tools').canonicalFile.toPath()
                 def target = file(project.property('hosthopClientDir')).canonicalFile.toPath()
-                def prepared = project.hasProperty('hosthopHostSmoke') && java.nio.file.Files.isRegularFile(target.resolve('.hosthop-test-client'))
+                def prepared = (project.hasProperty('hosthopHostSmoke') || project.hasProperty('hosthopWorldSmoke')) && java.nio.file.Files.isRegularFile(target.resolve('.hosthop-test-client'))
                 if (!target.startsWith(root) || target == root || (java.nio.file.Files.exists(target) && !prepared)) {
                     throw new GradleException('Test client directory must be new and under .tools')
                 }
@@ -357,6 +359,15 @@ tasks.register('driveQuotaLiveCheck', JavaExec) {
     mainClass = 'dev.hosthop.storage.DriveQuotaLiveCheck'
     if (project.hasProperty('driveLiveConfig') && project.hasProperty('driveLiveCredentials')) {
         args project.property('driveLiveConfig'), project.property('driveLiveCredentials')
+    }
+}
+tasks.register('seedLatestCopyLive', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.SeedLatestCopyLive'
+    if (project.hasProperty('seedInvitation') && project.hasProperty('seedCredentials')
+            && project.hasProperty('seedArchive') && project.hasProperty('seedDirectory')) {
+        args project.property('seedInvitation'), project.property('seedCredentials'), project.property('seedArchive'), project.property('seedDirectory')
     }
 }
 tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck'), tasks.named('invitationSafetyCheck'), tasks.named('pendingHostRecoveryCheck') }
