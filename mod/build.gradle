@@ -77,6 +77,10 @@ neoForge {
                 systemProperty 'hosthop.testBridge', file('../poc/d1/local_https_bridge.mjs').absolutePath
                 systemProperty 'hosthop.miniflare', file('../.tools/d1-tool/node_modules/miniflare').absolutePath
                 if (project.hasProperty('hosthopInterruptedSmoke')) systemProperty 'hosthop.interruptedSmoke', 'true'
+                if (project.hasProperty('hosthopCloseHostSmoke')) {
+                    systemProperty 'hosthop.closeHostSmoke', 'true'
+                    systemProperty 'hosthop.fakeRelaySmoke', 'true'
+                }
                 if (project.hasProperty('hosthopRealSmoke')) {
                     systemProperty 'hosthop.realSmoke', 'true'
                     systemProperty 'hosthop.realInvite', project.hasProperty('hosthopRealInvitation')

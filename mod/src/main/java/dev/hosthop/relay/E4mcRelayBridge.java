@@ -35,6 +35,7 @@ public final class E4mcRelayBridge {
         Object closing = token; session = null; token = null; listener.closed(closing);
     }
     public static boolean supported() {
+        if (!net.neoforged.fml.loading.FMLEnvironment.isProduction() && Boolean.getBoolean("hosthop.fakeRelaySmoke")) return true;
         return ModList.get().getModContainerById("e4mc")
                 .map(container -> container.getModInfo().getVersion().toString().equals("6.2.3")).orElse(false);
     }

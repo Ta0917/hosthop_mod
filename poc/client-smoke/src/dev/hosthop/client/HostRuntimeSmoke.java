@@ -32,6 +32,8 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
+import dev.hosthop.relay.E4mcRelayBridge;
 
 /** Opt-in real integrated-server handoff check using isolated data and local fake storage. */
 @EventBusSubscriber(modid = "hosthop", value = Dist.CLIENT)
@@ -42,6 +44,12 @@ public final class HostRuntimeSmoke {
     private static Context context;
     private static CompletableFuture<Boolean> block;
     private static int stage;
+    private static final Object FAKE_RELAY = new Object();
+    private static boolean fakeRelayStarted;
+
+    @SubscribeEvent public static void serverStopped(ServerStoppedEvent event) {
+        if (fakeRelayStarted) { E4mcRelayBridge.end(FAKE_RELAY); fakeRelayStarted = false; }
+    }
 
     private record Context(Process bridge, Invitation invitation, DriveCredentialManager credentials, SnapshotStore storage, LeaseAuthorityClient authority) {}
 
@@ -50,6 +58,12 @@ public final class HostRuntimeSmoke {
         var minecraft = Minecraft.getInstance();
         try {
             if (System.nanoTime() - START > TimeUnit.MINUTES.toNanos(3)) throw new IllegalStateException("host smoke timed out at stage " + stage);
+            if (Boolean.getBoolean("hosthop.fakeRelaySmoke") && stage == 2 && !fakeRelayStarted
+                    && minecraft.getSingleplayerServer() != null && minecraft.player != null) {
+                fakeRelayStarted = true;
+                E4mcRelayBridge.begin(FAKE_RELAY);
+                E4mcRelayBridge.assigned(FAKE_RELAY, "hosthop-test.e4mc.link");
+            }
             if (stage == 0) {
                 stage = 1;
                 setup = CompletableFuture.supplyAsync(() -> {
@@ -73,6 +87,7 @@ public final class HostRuntimeSmoke {
                 stage = 3;
             } else if (stage == 3 && block.isDone()) {
                 block.join();
+                if (Boolean.getBoolean("hosthop.closeHostSmoke")) { stage = 99; minecraft.stop(); return; }
                 minecraft.disconnect(new TitleScreen(), false);
                 stage = 4;
             } else if (stage == 4 && !HostWorldRuntime.active()) {
@@ -148,6 +163,7 @@ public final class HostRuntimeSmoke {
                 private int count;
                 private final java.util.Map<String, Path> objects = new java.util.HashMap<>();
                 @Override public GoogleDriveSnapshotStore.ObjectRef upload(Path archive, String folder, String accessToken) throws java.io.IOException, InterruptedException {
+                    if (Boolean.getBoolean("hosthop.closeHostSmoke")) Thread.sleep(17_000);
                     if (Boolean.getBoolean("hosthop.interruptedSmoke") && count == 0) {
                         count++;
                         throw new java.io.IOException("simulated interrupted upload");

@@ -52,8 +52,8 @@
   "screen.hosthop.lease_failed": "通信が途切れたためホストを停止します",
   "screen.hosthop.recovery_required": "再ホストする前に復旧が必要です",
   "screen.hosthop.cancelled": "ホストの起動を中止しました",
-  "screen.hosthop.saving_world": "共有ワールドを保存中です。Minecraftを閉じないでください",
-  "screen.hosthop.uploading": "保存データをアップロード中: %s%%。Minecraftを閉じないでください",
-  "screen.hosthop.upload_confirming": "アップロード完了、保存を確定中です。Minecraftを閉じないでください",
+  "screen.hosthop.saving_world": "共有ワールドを保存中です。画面を閉じても保存を続けます",
+  "screen.hosthop.uploading": "保存データをアップロード中: %s%%。画面を閉じても保存を続けます",
+  "screen.hosthop.upload_confirming": "アップロード完了、保存を確定中です。画面を閉じても保存を続けます",
   "screen.hosthop.saved_world": "共有ワールドを保存しました"
 }
