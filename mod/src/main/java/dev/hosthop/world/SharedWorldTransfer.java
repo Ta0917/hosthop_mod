@@ -10,6 +10,7 @@ import dev.hosthop.snapshot.SnapshotVerifier;
 import dev.hosthop.snapshot.SnapshotWriter;
 import dev.hosthop.snapshot.StoppedWorldLock;
 import dev.hosthop.storage.SnapshotStore;
+import dev.hosthop.storage.GoogleDriveSnapshotStore;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -67,7 +68,12 @@ public final class SharedWorldTransfer {
         if (!gate.serverStoppedForSnapshot(acquisition.attempt(), nanos.getAsLong(), millis.getAsLong()))
             throw new IOException("Server stop was not accepted");
         try (var lock = StoppedWorldLock.acquire(stoppedWorld)) { SnapshotWriter.create(stoppedWorld, archive); }
-        var object = storage.upload(archive, folderId, driveToken);
+        GoogleDriveSnapshotStore.ObjectRef object;
+        try { object = storage.upload(archive, folderId, driveToken); }
+        catch (IOException | InterruptedException failure) {
+            com.mojang.logging.LogUtils.getLogger().warn("HostHop snapshot upload failed ({})", failure.getClass().getSimpleName());
+            throw failure;
+        }
         if (!gate.finalSnapshotVerified(acquisition.attempt(), acquisition.generation(), nanos.getAsLong(), millis.getAsLong()))
             throw new IOException("Lease expired before publication");
         var operation = new PublicationRecord(acquisition.world(), operationId, acquisition.principal(), acquisition.lease(),

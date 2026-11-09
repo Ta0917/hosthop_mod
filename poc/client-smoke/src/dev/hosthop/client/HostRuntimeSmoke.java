@@ -64,6 +64,7 @@ public final class HostRuntimeSmoke {
             } else if (stage == 2 && HostWorldRuntime.hostingReady() && minecraft.player != null) {
                 var server = minecraft.getSingleplayerServer();
                 if (server == null) return;
+                if (server.getWorldData().getSinglePlayerUUID() != null) throw new IllegalStateException("previous host identity was retained");
                 block = new CompletableFuture<>();
                 server.execute(() -> {
                     try { server.overworld().getChunk(0, 0); server.overworld().setBlock(MARKER, Blocks.DIAMOND_BLOCK.defaultBlockState(), 3); block.complete(true); }
@@ -83,6 +84,7 @@ public final class HostRuntimeSmoke {
             } else if (stage == 5 && HostWorldRuntime.hostingReady() && minecraft.player != null) {
                 var server = minecraft.getSingleplayerServer();
                 if (server == null) return;
+                if (server.getWorldData().getSinglePlayerUUID() != null) throw new IllegalStateException("previous host identity was retained after restore");
                 block = new CompletableFuture<>();
                 server.execute(() -> {
                     try { server.overworld().getChunk(0, 0); block.complete(server.overworld().getBlockState(MARKER).is(Blocks.DIAMOND_BLOCK)); }

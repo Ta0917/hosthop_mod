@@ -325,19 +325,23 @@ public final class HostWorldRuntime {
     private void finish(MinecraftServer candidate) {
         if (candidate != server || !finishing.compareAndSet(false, true)) return;
         worker.execute(() -> {
+            String shutdownStage = "server stop verification";
             try {
                 candidate.getRunningThread().join(30_000);
                 if (candidate.getRunningThread().isAlive() || !ServerStopSignal.completedFor(candidate) || monitor == null
                         || monitor.hasFailure() || failed.get() || gate.phase() != LocalHostGate.Phase.QUIESCING)
                     throw new IOException("Server shutdown could not be verified");
+                shutdownStage = "relay shutdown";
                 for (int i = 0; i < 50 && relay.sessionOpen(); i++) Thread.sleep(100);
                 CompletableFuture.runAsync(() -> {}, relayWorker).get(15, TimeUnit.SECONDS);
                 if (relay.sessionOpen() || gate.phase() != LocalHostGate.Phase.QUIESCING) throw new IOException("Relay did not close");
                 new WindowsSecretStore(pendingPath).save(pendingData("stopped", acquisition.lease(), worldPath.getFileName().toString()));
                 tell("screen.hosthop.saving_world");
+                shutdownStage = "Drive authorization";
                 String token = credentials.access().accessToken();
                 Path journal = sessionDir.resolve("publication.dat");
                 try {
+                    shutdownStage = "snapshot publication";
                     transfer.publishAfterStopped(acquisition, worldPath, sessionDir.resolve("final.zip"), journal,
                             UUID.randomUUID().toString(), invitation.folder(), token, true);
                 } catch (IOException | InterruptedException failure) {
@@ -351,6 +355,7 @@ public final class HostWorldRuntime {
                 Files.deleteIfExists(journal);
                 tell("screen.hosthop.saved_world");
             } catch (Exception failure) {
+                com.mojang.logging.LogUtils.getLogger().warn("HostHop shutdown failed during {} ({})", shutdownStage, failure.getClass().getSimpleName());
                 tell(failure instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace ? "screen.hosthop.disk_recovery"
                         : failure instanceof dev.hosthop.storage.GoogleDriveSnapshotStore.QuotaExceeded ? "screen.hosthop.drive_recovery" : "screen.hosthop.recovery_required");
             } finally { cleanup(); }
