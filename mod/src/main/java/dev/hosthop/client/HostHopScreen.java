@@ -64,7 +64,7 @@ public final class HostHopScreen extends Screen {
             try {
                 String savedStatus = dev.hosthop.world.SaveStatus.read(secretPath().getParent());
                 if (savedStatus != null) currentStatus = savedStatus;
-            } catch (IOException ignored) { }
+            } catch (IOException failure) { currentStatus = "screen.hosthop.recovery_required"; }
         }
         status = Component.translatable(currentStatus);
         watchingExternalSave = !HostWorldRuntime.active() && currentStatus.equals("screen.hosthop.saving_world");
