@@ -398,6 +398,13 @@ tasks.register('stoppedRecoveryLiveCheck', JavaExec) {
     if (project.hasProperty('deltaInvitation') && project.hasProperty('deltaCredentials') && project.hasProperty('deltaDirectory'))
         args project.property('deltaInvitation'), project.property('deltaCredentials'), project.property('deltaDirectory')
 }
+tasks.register('driveResumeLiveCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.DriveResumeLiveCheck'
+    if (project.hasProperty('deltaInvitation') && project.hasProperty('deltaCredentials') && project.hasProperty('deltaDirectory'))
+        args project.property('deltaInvitation'), project.property('deltaCredentials'), project.property('deltaDirectory')
+}
 tasks.register('deltaAccessLiveCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath
