@@ -1,7 +1,7 @@
 package dev.hosthop.client;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
+import dev.hosthop.reconnect.ReconnectWaitPolicy;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
@@ -13,8 +13,6 @@ import net.minecraft.network.chat.Component;
 
 /** A cancellable waiting screen that follows the current authenticated host. */
 public final class HostHopReconnectScreen extends Screen {
-    // Large worlds can take several minutes to upload before a new host starts.
-    private static final long MAX_WAIT = TimeUnit.MINUTES.toNanos(30);
     private final GuestReconnect reconnect;
     private final long started;
     private int ticks;
@@ -33,8 +31,9 @@ public final class HostHopReconnectScreen extends Screen {
 
     @Override public void tick() {
         if (!GuestReconnect.active(reconnect)) return;
-        if (System.nanoTime() - started > MAX_WAIT) { onClose(); return; }
-        int interval = System.nanoTime() - started < TimeUnit.MINUTES.toNanos(5) ? 40 : 200;
+        long now = System.nanoTime();
+        if (ReconnectWaitPolicy.expired(started, now)) { onClose(); return; }
+        int interval = ReconnectWaitPolicy.pollTicks(started, now);
         if (checking || ++ticks < interval) return;
         ticks = 0; checking = true;
         CompletableFuture.supplyAsync(() -> {

@@ -5,6 +5,9 @@ import dev.hosthop.lease.LeaseAuthorityClient;
 
 public final class ReconnectControllerTest {
     public static void main(String[] args) {
+        long minute = java.util.concurrent.TimeUnit.MINUTES.toNanos(1);
+        check(!ReconnectWaitPolicy.expired(0, 8 * minute) && ReconnectWaitPolicy.expired(0, 30 * minute));
+        check(ReconnectWaitPolicy.pollTicks(0, minute) == 40 && ReconnectWaitPolicy.pollTicks(0, 8 * minute) == 200);
         var controller = new ReconnectController();
         var session = controller.start("world", 4, 0);
         check(controller.connect(session, destination("other", 5), 0, 0) == null);
