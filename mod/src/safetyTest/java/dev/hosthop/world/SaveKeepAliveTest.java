@@ -8,6 +8,10 @@ public final class SaveKeepAliveTest {
     public static void main(String[] args) throws Exception {
         if (args.length == 2 && args[0].equals("child")) {
             var guard = new SaveKeepAlive();
+            if (!SaveKeepAlive.active()) throw new AssertionError("save guard not active");
+            if (!SaveKeepAlive.suppressWatchdog("post-main", false)
+                    || !SaveKeepAlive.suppressWatchdog("window close callback", true)
+                    || SaveKeepAlive.suppressWatchdog("unrelated", true)) throw new AssertionError("watchdog policy mismatch");
             var save = new Thread(() -> {
                 try { Thread.sleep(600); Files.writeString(Path.of(args[1]), "saved"); }
                 catch (Exception failure) { throw new RuntimeException(failure); }
@@ -17,6 +21,8 @@ public final class SaveKeepAliveTest {
             save.start();
             return;
         }
+        if (SaveKeepAlive.suppressWatchdog("post-main", false)
+                || SaveKeepAlive.suppressWatchdog("window close callback", false)) throw new AssertionError("watchdog suppressed without a host");
         var dir = Files.createTempDirectory("hosthop-keepalive-test-");
         var marker = dir.resolve("saved.txt");
         String executable = System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win") ? "java.exe" : "java";
