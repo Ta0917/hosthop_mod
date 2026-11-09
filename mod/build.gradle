@@ -385,6 +385,12 @@ tasks.register('binaryDeltaCheck', JavaExec) {
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.snapshot.BinaryDeltaTest'
 }
+tasks.register('largeWorldOfflineCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.snapshot.LargeWorldOfflineCheck'
+    if (project.hasProperty('largeWorldDirectory')) args project.property('largeWorldDirectory')
+}
 tasks.register('binaryDeltaFileCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath
