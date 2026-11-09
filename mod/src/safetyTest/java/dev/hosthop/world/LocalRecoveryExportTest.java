@@ -39,13 +39,16 @@ public final class LocalRecoveryExportTest {
             try { LocalRecoveryExport.export(game, config, invite); throw new AssertionError("world in use accepted"); }
             catch (IOException expected) { }
         }
-        String name = LocalRecoveryExport.export(game, config, invite);
-        if (!Files.readString(saves.resolve(name).resolve("level.dat")).equals("stopped-world")
+        var exported = LocalRecoveryExport.export(game, config, invite);
+        if (!exported.clean() || !Files.readString(saves.resolve(exported.name()).resolve("level.dat")).equals("stopped-world")
                 || !vault.load().equals(pending) || !Files.readString(world.resolve("level.dat")).equals("stopped-world"))
             throw new AssertionError("recovery export changed data");
         var unsafe = new java.util.HashMap<>(pending); unsafe.put("stage", "starting"); vault.save(unsafe);
-        try { LocalRecoveryExport.export(game, config, invite); throw new AssertionError("unverified session accepted"); }
-        catch (IOException expected) { }
+        var unclean = LocalRecoveryExport.export(game, config, invite);
+        if (unclean.clean() || !Files.readString(saves.resolve(unclean.name()).resolve("level.dat")).equals("stopped-world")
+                || !vault.load().equals(unsafe)) throw new AssertionError("unclean recovery was not preserved separately");
+        if (PendingHostRecovery.findStopped(unsafe, "world", "owner", game) != null)
+            throw new AssertionError("unclean world accepted for automatic publication");
         System.out.println("Local recovery export checks passed");
     }
 }

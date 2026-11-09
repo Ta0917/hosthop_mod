@@ -23,7 +23,16 @@ public final class PendingHostRecovery {
 
     /** A stopped marker is written only after the server and relay have fully stopped. */
     public static Stopped findStopped(Map<String, String> evidence, String worldId, String principal, Path gameDirectory) throws IOException {
-        if (evidence == null || !"stopped".equals(evidence.get("stage")) || !worldId.equals(evidence.get("world"))
+        return findLocal(evidence, worldId, principal, gameDirectory, false);
+    }
+
+    /** For an isolated local copy only; a crash does not prove a consistent server save. */
+    public static Stopped findForExport(Map<String, String> evidence, String worldId, String principal, Path gameDirectory) throws IOException {
+        return findLocal(evidence, worldId, principal, gameDirectory, true);
+    }
+
+    private static Stopped findLocal(Map<String, String> evidence, String worldId, String principal, Path gameDirectory, boolean allowUnclean) throws IOException {
+        if (evidence == null || !("stopped".equals(evidence.get("stage")) || allowUnclean && "starting".equals(evidence.get("stage"))) || !worldId.equals(evidence.get("world"))
                 || !principal.equals(evidence.get("principal"))) return null;
         String id = evidence.get("lease"), level = evidence.get("level");
         long epoch, generation;

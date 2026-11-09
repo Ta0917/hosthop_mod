@@ -79,11 +79,12 @@ public final class HostHopScreen extends Screen {
         CompletableFuture.runAsync(() -> {
             try {
                 var invite = Invitation.fromSecrets(new WindowsSecretStore(secretPath()).load());
-                String name = dev.hosthop.world.LocalRecoveryExport.export(Minecraft.getInstance().gameDirectory.toPath(), secretPath().getParent(), invite);
+                var exported = dev.hosthop.world.LocalRecoveryExport.export(Minecraft.getInstance().gameDirectory.toPath(), secretPath().getParent(), invite);
                 Minecraft.getInstance().execute(() -> {
                     if (id == request.get() && Minecraft.getInstance().gui.screen() == this) {
-                        busy(false, "screen.hosthop.exported_recovery");
-                        status = Component.translatable("screen.hosthop.exported_recovery", name);
+                        String key = exported.clean() ? "screen.hosthop.exported_recovery" : "screen.hosthop.exported_unclean_recovery";
+                        busy(false, key);
+                        status = Component.translatable(key, exported.name());
                     }
                 });
             } catch (Exception failure) { finish(id, "screen.hosthop.export_recovery_failed"); }

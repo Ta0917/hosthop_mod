@@ -17,8 +17,9 @@ import java.util.UUID;
 /** Export verified stopped local data to a new world without modifying cloud state. */
 public final class LocalRecoveryExport {
     private LocalRecoveryExport() {}
+    public record Exported(String name, boolean clean) {}
 
-    public static String export(Path gameDirectory, Path configDirectory, Invitation invitation) throws IOException {
+    public static Exported export(Path gameDirectory, Path configDirectory, Invitation invitation) throws IOException {
         if (gameDirectory == null || configDirectory == null || invitation == null) throw new IOException("Invalid recovery request");
         Path config = configDirectory.toAbsolutePath().normalize();
         if (Files.isSymbolicLink(config) || !Files.isDirectory(config, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Invalid recovery configuration");
@@ -30,8 +31,9 @@ public final class LocalRecoveryExport {
             if (lock == null) throw new IOException("HostHop is already running");
             try (lock) {
                 var pending = new WindowsSecretStore(config.resolve("pending-host.dat"));
-                var stopped = PendingHostRecovery.findStopped(pending.load(), invitation.world(), invitation.principal(), gameDirectory);
-                if (stopped == null) throw new IOException("No verified stopped session");
+                var evidence = pending.load();
+                var stopped = PendingHostRecovery.findForExport(evidence, invitation.world(), invitation.principal(), gameDirectory);
+                if (stopped == null) throw new IOException("No recoverable local session");
                 Path game = gameDirectory.toRealPath(), saves = game.resolve("saves");
                 if (Files.isSymbolicLink(saves) || !Files.isDirectory(saves, LinkOption.NOFOLLOW_LINKS)
                         || !saves.toRealPath().startsWith(game)) throw new IOException("Invalid saves directory");
@@ -40,7 +42,7 @@ public final class LocalRecoveryExport {
                 Path archive = stopped.session().resolve("recovery-export-" + id + ".zip");
                 try (var worldLock = StoppedWorldLock.acquire(stopped.world())) { SnapshotWriter.create(stopped.world(), archive); }
                 SnapshotVerifier.restore(archive, saves.resolve(name));
-                return name;
+                return new Exported(name, "stopped".equals(evidence.get("stage")));
             }
         }
     }
