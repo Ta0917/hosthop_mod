@@ -55,6 +55,14 @@ public final class WindowsSecretStoreTest {
             try { manager.authorizeFile("snapshot-id", "folder", select); throw new AssertionError("different Google account accepted"); }
             catch (DriveCredentialManager.AccountMismatch expected) { }
             check(store.load().equals(before));
+            var expired = new DriveCredentialManager(store, new GoogleDriveAuthorization("client-id", "client-secret", request -> { throw new GoogleDriveAuthorization.InvalidGrant(); }));
+            try { expired.access(); throw new AssertionError("expired credentials accepted"); }
+            catch (DriveCredentialManager.ReauthorizationRequired expected) { }
+            var offline = new DriveCredentialManager(store, new GoogleDriveAuthorization("client-id", "client-secret", request -> { throw new IOException("offline"); }));
+            try { offline.access(); throw new AssertionError("network failure accepted"); }
+            catch (DriveCredentialManager.ReauthorizationRequired wrong) { throw new AssertionError("network failure misclassified", wrong); }
+            catch (IOException expected) { }
+            check(store.load().equals(before));
             Files.write(file, new byte[] { 1, 2, 3 });
             try { store.load(); throw new AssertionError("corrupted secrets accepted"); }
             catch (IOException expected) { }

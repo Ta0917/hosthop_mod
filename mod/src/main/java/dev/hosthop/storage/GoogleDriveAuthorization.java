@@ -26,6 +26,9 @@ import java.util.concurrent.TimeoutException;
 
 /** Google desktop OAuth with PKCE and a user-selected Drive folder. */
 public final class GoogleDriveAuthorization {
+    public static final class InvalidGrant extends IOException {
+        InvalidGrant() { super("Google Drive authorization expired or was revoked"); }
+    }
     private static final URI TOKEN_ENDPOINT = URI.create("https://oauth2.googleapis.com/token");
     private static final String SCOPE = "https://www.googleapis.com/auth/drive.file";
     private final String clientId, clientSecret;
@@ -167,13 +170,21 @@ public final class GoogleDriveAuthorization {
     private String randomString() { byte[] bytes = new byte[32]; random.nextBytes(bytes); return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes); }
     private static String encode(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }
     private static boolean valid(String value, int limit) { return value != null && !value.isBlank() && value.length() <= limit && value.chars().noneMatch(Character::isISOControl); }
+    static boolean invalidGrant(byte[] body) {
+        if (body == null || body.length > 65_536) return false;
+        try { return "invalid_grant".equals(JsonParser.parseString(new String(body, StandardCharsets.UTF_8)).getAsJsonObject().get("error").getAsString()); }
+        catch (RuntimeException invalid) { return false; }
+    }
     private static Exchange httpExchange() {
         var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build();
         return request -> {
             var pending = http.sendAsync(request, ignored -> new GoogleDriveSnapshotStore.BoundedBody());
             try {
                 var response = pending.get(15, TimeUnit.SECONDS);
-                if (response.statusCode() != 200) throw new IOException("Drive authorization failed");
+                if (response.statusCode() != 200) {
+                    if (request.uri().equals(TOKEN_ENDPOINT) && response.statusCode() == 400 && invalidGrant(response.body())) throw new InvalidGrant();
+                    throw new IOException("Drive authorization failed");
+                }
                 return response.body();
             } catch (TimeoutException | ExecutionException failure) { pending.cancel(true); throw new IOException("Drive authorization failed", failure); }
             catch (InterruptedException interrupted) { pending.cancel(true); throw interrupted; }

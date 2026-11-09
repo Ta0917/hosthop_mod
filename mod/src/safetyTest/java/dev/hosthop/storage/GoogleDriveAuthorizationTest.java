@@ -20,6 +20,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class GoogleDriveAuthorizationTest {
     public static void main(String[] args) throws Exception {
+        check(GoogleDriveAuthorization.invalidGrant("{\"error\":\"invalid_grant\"}".getBytes(StandardCharsets.UTF_8)));
+        check(!GoogleDriveAuthorization.invalidGrant("{\"error\":\"temporarily_unavailable\"}".getBytes(StandardCharsets.UTF_8)));
+        check(!GoogleDriveAuthorization.invalidGrant("not json".getBytes(StandardCharsets.UTF_8)));
         var challenge = new AtomicReference<String>();
         var auth = new GoogleDriveAuthorization("client-id", "client-secret", request -> {
             check(request.uri().toString().equals("https://oauth2.googleapis.com/token"));
