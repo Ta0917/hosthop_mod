@@ -28,6 +28,7 @@ public final class SharedWorldTransfer {
     private final SnapshotStore storage;
     private final LongSupplier nanos, millis;
     private final java.util.function.LongConsumer uploadProgress;
+    private final java.util.function.LongConsumer downloadProgress;
     private GoogleDriveSnapshotStore.ObjectRef baseRef;
     private Path baseArchive;
 
@@ -38,11 +39,18 @@ public final class SharedWorldTransfer {
 
     public SharedWorldTransfer(LocalHostGate gate, LeaseAuthorityClient authority, SnapshotStore storage,
                                LongSupplier nanos, LongSupplier millis, java.util.function.LongConsumer uploadProgress) {
+        this(gate, authority, storage, nanos, millis, uploadProgress, ignored -> {});
+    }
+
+    public SharedWorldTransfer(LocalHostGate gate, LeaseAuthorityClient authority, SnapshotStore storage,
+                               LongSupplier nanos, LongSupplier millis, java.util.function.LongConsumer uploadProgress,
+                               java.util.function.LongConsumer downloadProgress) {
         if (gate == null || authority == null || storage == null || nanos == null || millis == null)
             throw new IllegalArgumentException("Missing shared-world input");
-        if (uploadProgress == null) throw new IllegalArgumentException("Missing progress callback");
+        if (uploadProgress == null || downloadProgress == null) throw new IllegalArgumentException("Missing progress callback");
         this.gate = gate; this.authority = authority; this.storage = storage; this.nanos = nanos; this.millis = millis;
         this.uploadProgress = uploadProgress;
+        this.downloadProgress = downloadProgress;
     }
 
     /** Restores to a new world directory; generation zero imports a stopped local copy. */
@@ -68,7 +76,7 @@ public final class SharedWorldTransfer {
                 cached = false;
             }
             if (!cached)
-                storage.downloadRaw(snapshot.object(), stored, driveToken);
+                storage.downloadRaw(snapshot.object(), stored, driveToken, downloadProgress);
             if (BinaryDelta.isDelta(stored)) {
                 var delta = BinaryDelta.inspect(stored);
                 Path base = archive.resolveSibling("base.zip");
@@ -80,7 +88,7 @@ public final class SharedWorldTransfer {
                 if (!baseCached) {
                     if (storage instanceof GoogleDriveSnapshotStore google && !google.canRead(delta.base(), driveToken))
                         throw new BaseAccessRequired();
-                    storage.download(delta.base(), base, driveToken);
+                    storage.download(delta.base(), base, driveToken, downloadProgress);
                 }
                 else SnapshotVerifier.verify(base);
                 BinaryDelta.apply(stored, base, archive);

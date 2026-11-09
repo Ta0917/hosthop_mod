@@ -24,7 +24,10 @@ public final class DeltaAccessLiveCheck {
         if (!store.isDelta(snapshot.object(), token)) throw new IOException("Current test snapshot is not a delta");
         Path directory = Files.createDirectory(Path.of(args[3]));
         Path delta = directory.resolve("delta.bin");
-        store.downloadRaw(snapshot.object(), delta, token);
+        var progress = new java.util.ArrayList<Long>();
+        store.downloadRaw(snapshot.object(), delta, token, progress::add);
+        if (progress.isEmpty() || progress.get(0) != 0 || progress.get(progress.size() - 1) != 100)
+            throw new IOException("Download progress did not complete");
         var base = BinaryDelta.inspect(delta).base();
         if (!store.canRead(base, token)) throw new IOException("Original account cannot read its delta base");
         if (store.isDelta(base, token)) throw new IOException("Delta base is not a full snapshot");

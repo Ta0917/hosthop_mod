@@ -41,7 +41,7 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
     public record ObjectRef(String fileId, String sha256, long size) {}
     record Reply(int status, HttpHeaders headers, byte[] body) {}
     @FunctionalInterface interface Transport { Reply send(HttpRequest request) throws IOException, InterruptedException; }
-    @FunctionalInterface interface Downloader { int receive(HttpRequest request, FileChannel output, long size, String digest) throws IOException, InterruptedException; }
+    @FunctionalInterface interface Downloader { int receive(HttpRequest request, FileChannel output, long size, String digest, java.util.function.LongConsumer progress) throws IOException, InterruptedException; }
     private final Transport transport;
     private final Downloader downloader;
 
@@ -150,11 +150,20 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
 
     /** Downloads to a new file, validates its SHA-256 and verifies the complete archive. */
     public SnapshotVerifier.Result download(ObjectRef object, Path destination, String accessToken) throws IOException, InterruptedException {
-        downloadRaw(object, destination, accessToken);
+        return download(object, destination, accessToken, ignored -> {});
+    }
+
+    @Override public SnapshotVerifier.Result download(ObjectRef object, Path destination, String accessToken, java.util.function.LongConsumer progress) throws IOException, InterruptedException {
+        downloadRaw(object, destination, accessToken, progress);
         return SnapshotVerifier.verify(destination);
     }
 
     @Override public void downloadRaw(ObjectRef object, Path destination, String accessToken) throws IOException, InterruptedException {
+        downloadRaw(object, destination, accessToken, ignored -> {});
+    }
+
+    @Override public void downloadRaw(ObjectRef object, Path destination, String accessToken, java.util.function.LongConsumer progress) throws IOException, InterruptedException {
+        if (progress == null) throw new IllegalArgumentException("Missing progress callback");
         if (object == null || object.fileId() == null || !object.fileId().matches("[A-Za-z0-9_-]{1,200}")
                 || object.sha256() == null || !object.sha256().matches("[0-9a-f]{64}") || object.size() <= 0 || object.size() > MAX_SIZE
                 || accessToken == null || accessToken.isBlank() || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
@@ -165,11 +174,13 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         var request = HttpRequest.newBuilder(uri).timeout(Duration.ofHours(2))
                 .header("Authorization", "Bearer " + accessToken).GET().build();
         try (var output = FileChannel.open(destination, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
-            if (downloader.receive(request, output, object.size(), object.sha256()) != 200) throw new IOException("Drive download failed");
+            progress.accept(0);
+            if (downloader.receive(request, output, object.size(), object.sha256(), progress) != 200) throw new IOException("Drive download failed");
             output.force(true);
         }
         if (Files.size(destination) != object.size() || !hashFile(destination).equals(object.sha256()))
             throw new IOException("Downloaded snapshot mismatch");
+        progress.accept(100);
     }
 
     /** Whether an already-authorized account can read the exact Drive object. */
@@ -262,9 +273,9 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
     }
 
     private static Downloader httpDownloader(HttpClient client) {
-        return (request, output, size, expectedHash) -> {
+        return (request, output, size, expectedHash, progress) -> {
             var pending = client.sendAsync(request, info -> info.statusCode() == 200
-                    ? new FileBody(output, size, expectedHash) : new RejectedBody());
+                    ? new FileBody(output, size, expectedHash, progress) : new RejectedBody());
             try { return pending.get(2, TimeUnit.HOURS).statusCode(); }
             catch (TimeoutException | ExecutionException failure) {
                 pending.cancel(true); throw new IOException("Drive download failed", failure);
@@ -287,10 +298,13 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         private final long expectedSize;
         private final String expectedHash;
         private final MessageDigest hash;
+        private final java.util.function.LongConsumer progress;
         private Flow.Subscription subscription;
         private long count;
-        FileBody(FileChannel output, long expectedSize, String expectedHash) {
+        private long lastPercent = -1;
+        FileBody(FileChannel output, long expectedSize, String expectedHash, java.util.function.LongConsumer progress) {
             this.output = output; this.expectedSize = expectedSize; this.expectedHash = expectedHash;
+            this.progress = progress;
             try { this.hash = digest(); } catch (IOException unavailable) { throw new IllegalStateException(unavailable); }
         }
         @Override public CompletionStage<Void> getBody() { return result; }
@@ -304,8 +318,10 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
                     hash.update(buffer.asReadOnlyBuffer());
                     while (buffer.hasRemaining()) output.write(buffer);
                 }
+                long percent = Math.min(99, count * 100 / expectedSize);
+                if (percent != lastPercent) { progress.accept(percent); lastPercent = percent; }
                 subscription.request(1);
-            } catch (IOException failure) { subscription.cancel(); result.completeExceptionally(failure); }
+            } catch (IOException | RuntimeException failure) { subscription.cancel(); result.completeExceptionally(failure); }
         }
         @Override public void onError(Throwable failure) { result.completeExceptionally(failure); }
         @Override public void onComplete() {

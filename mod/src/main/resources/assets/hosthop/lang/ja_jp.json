@@ -39,6 +39,8 @@
   "screen.hosthop.already_active": "共有ワールドの処理が進行中です",
   "screen.hosthop.local_process_busy": "別のMinecraftで共有データを処理中です。完了までお待ちください",
   "screen.hosthop.preparing": "共有ワールドを準備しています…",
+  "screen.hosthop.downloading": "ファイルをダウンロード中: %s%%",
+  "screen.hosthop.download_preparing": "ファイル取得完了、ワールドを準備中です…",
   "screen.hosthop.host_ready": "共有ワールドを公開しました",
   "screen.hosthop.host_failed": "ホスト起動に失敗しました。ローカルのコピーは保全されています",
   "screen.hosthop.disk_insufficient": "ディスクの空き容量が不足しています",

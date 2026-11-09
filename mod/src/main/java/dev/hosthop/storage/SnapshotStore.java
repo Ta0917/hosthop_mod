@@ -18,8 +18,17 @@ public interface SnapshotStore {
         return object;
     }
     SnapshotVerifier.Result download(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String accessToken) throws IOException, InterruptedException;
+    default SnapshotVerifier.Result download(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String accessToken, LongConsumer progress) throws IOException, InterruptedException {
+        var result = download(object, destination, accessToken);
+        progress.accept(100);
+        return result;
+    }
     /** Download an authenticated full snapshot or delta container without interpreting its contents. */
     default void downloadRaw(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String accessToken) throws IOException, InterruptedException {
         download(object, destination, accessToken);
+    }
+    default void downloadRaw(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String accessToken, LongConsumer progress) throws IOException, InterruptedException {
+        downloadRaw(object, destination, accessToken);
+        progress.accept(100);
     }
 }

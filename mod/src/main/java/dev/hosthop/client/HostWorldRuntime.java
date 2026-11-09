@@ -59,6 +59,7 @@ public final class HostWorldRuntime {
     private static final AtomicReference<HostWorldRuntime> ACTIVE = new AtomicReference<>();
     private static volatile String lastStatus = "screen.hosthop.initial";
     private static volatile int uploadPercent = -1;
+    private static volatile int downloadPercent = -1;
     private final Invitation invitation;
     private final DriveCredentialManager credentials;
     private final String initialName;
@@ -90,7 +91,7 @@ public final class HostWorldRuntime {
         this.authority = authority;
         coordinator = new LeaseCoordinator(gate, authority, System::nanoTime, System::currentTimeMillis);
         transfer = new SharedWorldTransfer(gate, authority, storage, System::nanoTime, System::currentTimeMillis,
-                percent -> uploadPercent = (int) percent);
+                percent -> uploadPercent = (int) percent, percent -> downloadPercent = (int) percent);
     }
 
     public static boolean start(Invitation invitation, DriveCredentialManager credentials, String initialName, Consumer<String> status) {
@@ -102,6 +103,7 @@ public final class HostWorldRuntime {
         var runtime = new HostWorldRuntime(invitation, credentials, initialName, status, storage, authority);
         if (!ACTIVE.compareAndSet(null, runtime)) { runtime.shutdownExecutors(); return false; }
         uploadPercent = -1;
+        downloadPercent = -1;
         runtime.worker.execute(runtime::prepare);
         return true;
     }
@@ -109,6 +111,7 @@ public final class HostWorldRuntime {
     public static boolean hostingReady() { var runtime = ACTIVE.get(); return runtime != null && runtime.relayReady && !runtime.failed.get(); }
     public static String lastStatus() { return lastStatus; }
     public static int uploadPercent() { return uploadPercent; }
+    public static int downloadPercent() { return downloadPercent; }
     public static void cancelPreparing() { var runtime = ACTIVE.get(); if (runtime != null && !runtime.launchRequested) runtime.cancelled.set(true); }
 
     private void prepare() {

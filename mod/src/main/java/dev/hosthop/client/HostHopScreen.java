@@ -254,6 +254,11 @@ public final class HostHopScreen extends Screen {
         graphics.text(font, Component.translatable("screen.hosthop.version", version), 4, 4, -1);
         graphics.centeredText(font, title, width / 2, height / 2 - 117, -1);
         var saving = HostWorldRuntime.lastStatus().equals("screen.hosthop.saving_world") ? HostHopStatusOverlay.message() : null;
+        if (HostWorldRuntime.active() && HostWorldRuntime.lastStatus().equals("screen.hosthop.preparing") && HostWorldRuntime.downloadPercent() >= 0) {
+            int percent = HostWorldRuntime.downloadPercent();
+            saving = percent >= 100 ? Component.translatable("screen.hosthop.download_preparing")
+                    : Component.translatable("screen.hosthop.downloading", percent);
+        }
         graphics.centeredText(font, saving == null ? status : saving, width / 2, height / 2 - 96, -1);
     }
 }

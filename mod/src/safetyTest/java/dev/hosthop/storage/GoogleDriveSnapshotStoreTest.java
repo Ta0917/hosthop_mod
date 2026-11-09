@@ -70,16 +70,18 @@ public final class GoogleDriveSnapshotStoreTest {
             check(blockedCalls.get() == 1);
             var unlimited = new GoogleDriveSnapshotStore(request -> reply(200, Map.of(), "{\"storageQuota\":{}}"));
             unlimited.checkUploadCapacity(size, "test-token");
-            var downloader = new GoogleDriveSnapshotStore(request -> { throw new AssertionError(); }, (request, output, expectedSize, expectedHash) -> {
+            var downloader = new GoogleDriveSnapshotStore(request -> { throw new AssertionError(); }, (request, output, expectedSize, expectedHash, progressUpdate) -> {
                 check(request.uri().toString().equals("https://www.googleapis.com/drive/v3/files/file-id?alt=media"));
                 var bytes = java.nio.ByteBuffer.wrap(Files.readAllBytes(archive));
                 while (bytes.hasRemaining()) output.write(bytes);
                 return 200;
             });
-            check(downloader.download(uploaded, downloaded, "test-token").files() == 1);
+            var downloadProgress = new java.util.ArrayList<Long>();
+            check(downloader.download(uploaded, downloaded, "test-token", downloadProgress::add).files() == 1);
+            check(downloadProgress.equals(java.util.List.of(0L, 100L)));
             try { downloader.download(uploaded, downloaded, "test-token"); throw new AssertionError("download overwritten"); }
             catch (java.nio.file.FileAlreadyExistsException expected) { }
-            var corruptDownloader = new GoogleDriveSnapshotStore(request -> { throw new AssertionError(); }, (request, output, expectedSize, expectedHash) -> {
+            var corruptDownloader = new GoogleDriveSnapshotStore(request -> { throw new AssertionError(); }, (request, output, expectedSize, expectedHash, progressUpdate) -> {
                 output.write(java.nio.ByteBuffer.wrap(new byte[] { 1, 2, 3 })); return 200;
             });
             try { corruptDownloader.download(uploaded, badDownload, "test-token"); throw new AssertionError("corrupt download accepted"); }
