@@ -78,7 +78,8 @@ neoForge {
                 if (project.hasProperty('hosthopInterruptedSmoke')) systemProperty 'hosthop.interruptedSmoke', 'true'
                 if (project.hasProperty('hosthopRealSmoke')) {
                     systemProperty 'hosthop.realSmoke', 'true'
-                    systemProperty 'hosthop.realInvite', file('../.tools/test-provision-output/invite-test_owner.txt').absolutePath
+                    systemProperty 'hosthop.realInvite', project.hasProperty('hosthopRealInvitation')
+                            ? project.property('hosthopRealInvitation') : file('../.tools/test-provision-output/invite-test_owner.txt').absolutePath
                     systemProperty 'hosthop.realCredentials', project.property('hosthopRealCredentials')
                 }
             }
