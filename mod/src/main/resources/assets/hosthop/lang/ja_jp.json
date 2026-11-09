@@ -1,6 +1,6 @@
 {
   "screen.hosthop.title": "共有ワールド",
-  "screen.hosthop.version": "HostHop %s — 参加者全員で同じ版を使用",
+  "screen.hosthop.version": "HostHop %s",
   "screen.hosthop.initial": "共有ワールドに参加、またはホストします",
   "screen.hosthop.initial_world": "初期ワールドのフォルダー名（初回のみ）",
   "screen.hosthop.register": "クリップボードの招待コードを登録",

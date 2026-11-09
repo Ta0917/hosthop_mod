@@ -1,6 +1,6 @@
 {
   "screen.hosthop.title": "Shared World",
-  "screen.hosthop.version": "HostHop %s — all players should use the same version",
+  "screen.hosthop.version": "HostHop %s",
   "screen.hosthop.initial": "Join or start the shared world",
   "screen.hosthop.initial_world": "Initial world folder (first host only)",
   "screen.hosthop.register": "Register invitation from clipboard",
