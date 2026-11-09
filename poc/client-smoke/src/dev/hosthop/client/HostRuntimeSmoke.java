@@ -95,7 +95,8 @@ public final class HostRuntimeSmoke {
                 minecraft.disconnect(new TitleScreen(), false);
                 stage = 4;
             } else if (stage == 4 && !HostWorldRuntime.active()) {
-                String expected = Boolean.getBoolean("hosthop.interruptedSmoke") ? "screen.hosthop.recovery_required" : "screen.hosthop.saved_world";
+                String expected = Boolean.getBoolean("hosthop.interruptedSmoke") || Boolean.getBoolean("hosthop.expiredRecoverySmoke")
+                        ? "screen.hosthop.recovery_required" : "screen.hosthop.saved_world";
                 if (!HostWorldRuntime.lastStatus().equals(expected)) throw new IllegalStateException("first save result unexpected: " + HostWorldRuntime.lastStatus());
                 if (Boolean.getBoolean("hosthop.verifyCloseSmoke")) {
                     Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-close-restore-result.txt"), "verified");
@@ -135,12 +136,18 @@ public final class HostRuntimeSmoke {
                 if (!HostWorldRuntime.lastStatus().equals("screen.hosthop.saved_world")) throw new IllegalStateException("second save failed: " + HostWorldRuntime.lastStatus());
                 if (Boolean.getBoolean("hosthop.requireDeltaSmoke"))
                     Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-delta-host-result.txt"), "verified");
+                if (Boolean.getBoolean("hosthop.expiredRecoverySmoke"))
+                    Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-expired-recovery-result.txt"), "verified");
                 System.out.println("HOSTHOP_HOST_SMOKE two integrated hosts restored world change=true");
                 finish(minecraft);
             } else if ((stage == 2 || stage == 5) && !HostWorldRuntime.active()) {
                 throw new IllegalStateException("host startup failed: " + HostWorldRuntime.lastStatus());
             }
         } catch (Throwable failure) {
+            if (Boolean.getBoolean("hosthop.expiredRecoverySmoke")) {
+                try { Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-expired-recovery-failure.txt"), failure.toString()); }
+                catch (Exception ignored) { }
+            }
             if (Boolean.getBoolean("hosthop.requireDeltaSmoke")) {
                 try { Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-delta-host-failure.txt"), failure.toString()); }
                 catch (Exception ignored) { }
@@ -207,8 +214,13 @@ public final class HostRuntimeSmoke {
                 private final java.util.Map<String, Path> objects = new java.util.HashMap<>();
                 @Override public GoogleDriveSnapshotStore.ObjectRef upload(Path archive, String folder, String accessToken) throws java.io.IOException, InterruptedException {
                     if (Boolean.getBoolean("hosthop.closeHostSmoke")) Thread.sleep(17_000);
-                    if (Boolean.getBoolean("hosthop.interruptedSmoke") && count == 0) {
+                    if ((Boolean.getBoolean("hosthop.interruptedSmoke") || Boolean.getBoolean("hosthop.expiredRecoverySmoke")) && count == 0) {
                         count++;
+                        if (Boolean.getBoolean("hosthop.expiredRecoverySmoke")) {
+                            try { post(http, base, "/test-expire", "{}"); }
+                            catch (InterruptedException interrupted) { throw interrupted; }
+                            catch (Exception failure) { throw new java.io.IOException(failure); }
+                        }
                         throw new java.io.IOException("simulated interrupted upload");
                     }
                     String id = "file-" + ++count;
