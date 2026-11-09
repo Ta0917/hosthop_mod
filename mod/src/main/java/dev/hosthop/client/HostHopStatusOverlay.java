@@ -31,6 +31,11 @@ public final class HostHopStatusOverlay {
     @SubscribeEvent public static void draw(ScreenEvent.Render.Post event) {
         if (!(event.getScreen() instanceof TitleScreen screen)) return;
         var message = message();
-        if (message != null) event.getGuiGraphics().centeredText(Minecraft.getInstance().font, message, screen.width / 2, screen.height - 30, -1);
+        if (message != null) {
+            var font = Minecraft.getInstance().font;
+            var lines = font.split(message, Math.max(1, screen.width - 12));
+            for (int i = 0; i < lines.size(); i++)
+                event.getGuiGraphics().centeredText(font, lines.get(i), screen.width / 2, screen.height - 20 - lines.size() * 10 + i * 10, -1);
+        }
     }
 }

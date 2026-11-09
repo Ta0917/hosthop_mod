@@ -262,6 +262,8 @@ public final class HostHopScreen extends Screen {
             saving = percent >= 100 ? Component.translatable("screen.hosthop.download_preparing")
                     : Component.translatable("screen.hosthop.downloading", percent);
         }
-        graphics.centeredText(font, saving == null ? status : saving, width / 2, height / 2 - 96, -1);
+        var lines = font.split(saving == null ? status : saving, Math.max(1, width - 12));
+        for (int i = 0; i < Math.min(lines.size(), 3); i++)
+            graphics.centeredText(font, lines.get(i), width / 2, height / 2 - 105 + i * 10, -1);
     }
 }
