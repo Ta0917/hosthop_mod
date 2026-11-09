@@ -13,6 +13,7 @@ public final class InvitationTest {
         var invite = Invitation.fromSecrets(fields);
         var copy = Invitation.decode(invite.encode());
         check(copy.secrets().equals(fields) && !copy.toString().contains("client-secret"));
+        check(Invitation.decode(" \r\n" + invite.encode() + "\r\n ").secrets().equals(fields));
         var invalid = new java.util.HashMap<>(fields);
         invalid.put("authority", "http://service.example");
         try { Invitation.fromSecrets(invalid); throw new AssertionError("HTTP accepted"); } catch (IOException expected) { }

@@ -40,7 +40,9 @@ public final class Invitation {
     }
 
     public static Invitation decode(String code) throws IOException {
-        if (code == null || code.length() > 8192 || !code.startsWith("hosthop1:")) throw new IOException("Invalid invitation");
+        if (code == null || code.length() > 8192) throw new IOException("Invalid invitation");
+        code = code.strip();
+        if (!code.startsWith("hosthop1:")) throw new IOException("Invalid invitation");
         byte[] decoded;
         try { decoded = Base64.getUrlDecoder().decode(code.substring(9)); }
         catch (IllegalArgumentException invalid) { throw new IOException("Invalid invitation", invalid); }
