@@ -7,6 +7,7 @@ import dev.hosthop.storage.GoogleDriveAuthorization;
 import dev.hosthop.storage.DriveCredentialManager;
 import dev.hosthop.storage.GoogleDriveSnapshotStore;
 import dev.hosthop.snapshot.BinaryDelta;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -33,6 +34,8 @@ public final class HostHopScreen extends Screen {
     private EditBox initialWorld;
     private boolean startedHere;
     private boolean watchingSave;
+    private boolean watchingExternalSave;
+    private int externalStatusTicks;
     private volatile DriveCredentialManager activeAuthorization;
 
     public HostHopScreen(Screen parent) { super(Component.translatable("screen.hosthop.title")); this.parent = parent; }
@@ -56,9 +59,18 @@ public final class HostHopScreen extends Screen {
                 .bounds(x, height / 2 + 60, 210, 20).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
                 .bounds(x, height / 2 + 86, 210, 20).build());
-        status = Component.translatable(HostWorldRuntime.lastStatus());
-        watchingSave = HostWorldRuntime.active() && HostWorldRuntime.lastStatus().equals("screen.hosthop.saving_world");
+        String currentStatus = HostWorldRuntime.lastStatus();
+        if (!HostWorldRuntime.active() && currentStatus.equals("screen.hosthop.initial")) {
+            try {
+                String savedStatus = dev.hosthop.world.SaveStatus.read(secretPath().getParent());
+                if (savedStatus != null) currentStatus = savedStatus;
+            } catch (IOException ignored) { }
+        }
+        status = Component.translatable(currentStatus);
+        watchingExternalSave = !HostWorldRuntime.active() && currentStatus.equals("screen.hosthop.saving_world");
+        watchingSave = HostWorldRuntime.active() && currentStatus.equals("screen.hosthop.saving_world");
         if (watchingSave) busy(true, "screen.hosthop.saving_world");
+        if (watchingExternalSave) busy(true, "screen.hosthop.saving_world");
     }
 
     private void exportRecovery() {
@@ -83,6 +95,19 @@ public final class HostHopScreen extends Screen {
         if (watchingSave && !HostWorldRuntime.lastStatus().equals("screen.hosthop.saving_world")) {
             watchingSave = false;
             busy(false, HostWorldRuntime.lastStatus());
+        }
+        if (watchingExternalSave && ++externalStatusTicks >= 40) {
+            externalStatusTicks = 0;
+            try {
+                String savedStatus = dev.hosthop.world.SaveStatus.read(secretPath().getParent());
+                if (!"screen.hosthop.saving_world".equals(savedStatus)) {
+                    watchingExternalSave = false;
+                    busy(false, savedStatus == null ? "screen.hosthop.recovery_required" : savedStatus);
+                }
+            } catch (IOException failure) {
+                watchingExternalSave = false;
+                busy(false, "screen.hosthop.recovery_required");
+            }
         }
     }
 

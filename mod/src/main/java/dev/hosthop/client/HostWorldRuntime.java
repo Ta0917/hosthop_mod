@@ -381,6 +381,12 @@ public final class HostWorldRuntime {
 
     private void tell(String key) {
         lastStatus = key;
+        if (key.equals("screen.hosthop.saving_world") || key.equals("screen.hosthop.saved_world")
+                || key.equals("screen.hosthop.recovery_required") || key.equals("screen.hosthop.disk_recovery")
+                || key.equals("screen.hosthop.drive_recovery")) {
+            try { dev.hosthop.world.SaveStatus.write(net.neoforged.fml.loading.FMLPaths.CONFIGDIR.get().resolve("hosthop"), key); }
+            catch (IOException failure) { com.mojang.logging.LogUtils.getLogger().warn("HostHop could not persist save status"); }
+        }
         minecraft.execute(() -> {
             status.accept(key);
             if (minecraft.level != null) minecraft.gui.hud.getChat().addClientSystemMessage(Component.translatable(key));

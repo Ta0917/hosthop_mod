@@ -356,6 +356,11 @@ tasks.register('saveKeepAliveCheck', JavaExec) {
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.world.SaveKeepAliveTest'
 }
+tasks.register('saveStatusCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.world.SaveStatusTest'
+}
 tasks.register('localRecoveryExportCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath
@@ -451,7 +456,7 @@ tasks.register('prepareClientCredentials', JavaExec) {
         args project.property('clientInvitation'), project.property('clientDriveCredentials'), project.property('clientCredentialsOutput')
     }
 }
-tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck'), tasks.named('invitationSafetyCheck'), tasks.named('pendingHostRecoveryCheck'), tasks.named('hostPlayerIdentityCheck'), tasks.named('localSnapshotCacheCheck'), tasks.named('binaryDeltaCheck'), tasks.named('saveKeepAliveCheck'), tasks.named('localRecoveryExportCheck') }
+tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck'), tasks.named('invitationSafetyCheck'), tasks.named('pendingHostRecoveryCheck'), tasks.named('hostPlayerIdentityCheck'), tasks.named('localSnapshotCacheCheck'), tasks.named('binaryDeltaCheck'), tasks.named('saveKeepAliveCheck'), tasks.named('localRecoveryExportCheck'), tasks.named('saveStatusCheck') }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {
