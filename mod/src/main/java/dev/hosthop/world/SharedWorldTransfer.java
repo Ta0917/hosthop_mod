@@ -20,6 +20,9 @@ import java.util.function.LongSupplier;
 
 /** Shared-world transfer lifecycle. The caller owns Minecraft and relay start/stop. */
 public final class SharedWorldTransfer {
+    public static final class BaseAccessRequired extends IOException {
+        public BaseAccessRequired() { super("Access to delta base is required"); }
+    }
     private final LocalHostGate gate;
     private final LeaseAuthorityClient authority;
     private final SnapshotStore storage;
@@ -74,7 +77,11 @@ public final class SharedWorldTransfer {
                 catch (IOException cacheError) {
                     if (Files.exists(base)) throw cacheError;
                 }
-                if (!baseCached) storage.download(delta.base(), base, driveToken);
+                if (!baseCached) {
+                    if (storage instanceof GoogleDriveSnapshotStore google && !google.canRead(delta.base(), driveToken))
+                        throw new BaseAccessRequired();
+                    storage.download(delta.base(), base, driveToken);
+                }
                 else SnapshotVerifier.verify(base);
                 BinaryDelta.apply(stored, base, archive);
                 baseRef = delta.base(); baseArchive = base;

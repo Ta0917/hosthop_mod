@@ -14,6 +14,7 @@
   "screen.hosthop.snapshot_authorized": "最新データへのアクセスを許可しました",
   "screen.hosthop.snapshot_authorize_failed": "最新データを認証できませんでした",
   "screen.hosthop.account_mismatch": "連携済みのGoogleアカウントを選択してください",
+  "screen.hosthop.base_access_required": "最新データへのアクセスを許可してから、もう一度お試しください",
   "screen.hosthop.join": "共有ワールドに参加",
   "screen.hosthop.history": "保存履歴",
   "screen.hosthop.history_title": "共有ワールドの保存履歴",

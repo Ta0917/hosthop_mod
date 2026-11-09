@@ -14,6 +14,7 @@
   "screen.hosthop.snapshot_authorized": "Latest snapshot access granted",
   "screen.hosthop.snapshot_authorize_failed": "Could not authorize latest snapshot",
   "screen.hosthop.account_mismatch": "Select the Google account already linked to this world",
+  "screen.hosthop.base_access_required": "Allow access to the latest data, then try again",
   "screen.hosthop.join": "Join shared world",
   "screen.hosthop.history": "History",
   "screen.hosthop.history_title": "Shared world history",

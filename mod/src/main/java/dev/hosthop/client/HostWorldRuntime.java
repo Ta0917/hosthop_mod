@@ -196,7 +196,9 @@ public final class HostWorldRuntime {
                     root == null ? "none" : root.getClass().getSimpleName());
             if (acquisition != null && acquisition.epoch() > 0 && !launchRequested) {
                 abortBeforeStart();
-                if (error instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace && lastStatus.equals("screen.hosthop.host_failed"))
+                if (error instanceof SharedWorldTransfer.BaseAccessRequired && lastStatus.equals("screen.hosthop.host_failed"))
+                    tell("screen.hosthop.base_access_required");
+                else if (error instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace && lastStatus.equals("screen.hosthop.host_failed"))
                     tell("screen.hosthop.disk_insufficient");
                 else if (error instanceof dev.hosthop.storage.GoogleDriveSnapshotStore.QuotaExceeded && lastStatus.equals("screen.hosthop.host_failed"))
                     tell("screen.hosthop.drive_insufficient");
