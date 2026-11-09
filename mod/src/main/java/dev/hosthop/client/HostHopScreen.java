@@ -205,6 +205,9 @@ public final class HostHopScreen extends Screen {
 
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        String version = net.neoforged.fml.ModList.get().getModContainerById("hosthop")
+                .map(container -> container.getModInfo().getVersion().toString()).orElse("?");
+        graphics.centeredText(font, Component.translatable("screen.hosthop.version", version), width / 2, 12, -1);
         graphics.centeredText(font, title, width / 2, height / 2 - 117, -1);
         var saving = HostWorldRuntime.lastStatus().equals("screen.hosthop.saving_world") ? HostHopStatusOverlay.message() : null;
         graphics.centeredText(font, saving == null ? status : saving, width / 2, height / 2 - 96, -1);
