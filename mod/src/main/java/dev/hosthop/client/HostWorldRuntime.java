@@ -258,7 +258,9 @@ public final class HostWorldRuntime {
                 if (coordinator.recoverAcquisition(attempt) && attempt.epoch() == stopped.epoch()
                         && attempt.generation() == stopped.generation()
                         && gate.resumeStopped(attempt.attempt(), System.nanoTime(), System.currentTimeMillis())) recovered = attempt;
-            } catch (IOException unavailable) { /* The original grant may have expired. */ }
+            } catch (LeaseAuthorityClient.LeaseExpired expired) { /* The original grant has expired. */ }
+            if (recovered == null && gate.phase() != LocalHostGate.Phase.ACQUIRING)
+                throw new IOException("Stopped host lease did not match recovery evidence");
             if (recovered == null) {
                 gate.requireStop(attempt.attempt());
                 if (!gate.confirmStopped(attempt.attempt())) throw new IOException("Recovery gate could not be reset");

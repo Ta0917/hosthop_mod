@@ -26,7 +26,9 @@ public final class LeaseAuthorityClientTest {
         expectFailure(() -> client.lookupAcquisition("world", "lease", 30, "other", 2));
         expectFailure(() -> client.lookupAcquisition("world", "lease", 29, "owner", 2));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"owner\":\"owner\",\"epoch\":4,\"base_generation\":3,\"duration_seconds\":30,\"active\":0,\"server_now\":100,\"expires\":130}"));
-        expectFailure(() -> client.lookupAcquisition("world", "lease", 30, "owner", 2));
+        try { client.lookupAcquisition("world", "lease", 30, "owner", 2); throw new AssertionError("expired grant accepted"); }
+        catch (LeaseAuthorityClient.LeaseExpired expected) { }
+        expectFailure(() -> client.lookupAcquisition("world", "lease", 30, "other", 2));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"endpoint\":\"example.us.e4mc.link\",\"endpoint_revision\":7,\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         var endpoint = client.endpoint("world", 2);
         check(endpoint.epoch() == 4 && endpoint.revision() == 7 && endpoint.address().equals("example.us.e4mc.link"));

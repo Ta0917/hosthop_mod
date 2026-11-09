@@ -42,6 +42,9 @@ public final class LeaseAuthorityClient {
     public static final class PublicationNotFound extends IOException {
         private PublicationNotFound() { super("Publication was not found"); }
     }
+    public static final class LeaseExpired extends IOException {
+        private LeaseExpired() { super("The original lease is no longer active"); }
+    }
     public record Grant(long epoch, long generation, ConservativeLeaseDeadline deadline) {}
     public record Endpoint(String world, long epoch, long generation, long revision, String address,
                            ConservativeLeaseDeadline deadline) {}
@@ -355,9 +358,13 @@ public final class LeaseAuthorityClient {
         long generation = required(fields.numbers(), expectedOwner == null ? "generation" : "base_generation");
         long serverNow = required(fields.numbers(), "server_now");
         long expires = required(fields.numbers(), "expires");
-        if (expectedOwner != null && (!expectedOwner.equals(fields.strings().get("owner"))
-                || required(fields.numbers(), "duration_seconds") != duration || required(fields.numbers(), "active") != 1))
-            throw new IOException("Acquisition does not match active request");
+        if (expectedOwner != null) {
+            if (!expectedOwner.equals(fields.strings().get("owner")) || required(fields.numbers(), "duration_seconds") != duration)
+                throw new IOException("Acquisition does not match original request");
+            long active = required(fields.numbers(), "active");
+            if (active == 0) throw new LeaseExpired();
+            if (active != 1) throw new IOException("Invalid acquisition status");
+        }
         if (epoch < 1 || generation < 0 || serverNow < 0 || (expectedEpoch != 0 && epoch != expectedEpoch)) throw new IOException("Invalid lease grant");
         try {
             var deadline = ConservativeLeaseDeadline.fromGrant(startNanos, startMillis, serverNow, expires, margin);
