@@ -234,6 +234,32 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         } catch (RuntimeException invalid) { throw new IOException("Invalid Drive access response", invalid); }
     }
 
+    /** Move an explicitly selected, verified checkpoint object to Drive trash. */
+    public void trash(ObjectRef object, String folder, String token) throws IOException, InterruptedException {
+        if (object == null || object.fileId() == null || !object.fileId().matches("[A-Za-z0-9_-]{1,200}")
+                || object.sha256() == null || !object.sha256().matches("[0-9a-f]{64}") || object.size() < 1 || object.size() > MAX_SIZE
+                || folder == null || !folder.matches("[A-Za-z0-9_-]{1,200}") || token == null || token.isBlank()
+                || token.length() > 4096 || token.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException("Invalid checkpoint");
+        var metadata = HttpRequest.newBuilder(URI.create("https://www.googleapis.com/drive/v3/files/" + object.fileId()
+                + "?fields=id,name,size,sha256Checksum,parents,trashed")).timeout(Duration.ofSeconds(15))
+                .header("Authorization", "Bearer " + token).GET().build();
+        var prior = transport.send(metadata);
+        if (prior == null || prior.status() != 200) throw new IOException("Checkpoint file is not accessible");
+        validateMetadata(prior, folder, object.sha256() + ".zip", object.sha256(), object.size(), true);
+        try {
+            if (JsonParser.parseString(new String(prior.body(), StandardCharsets.UTF_8)).getAsJsonObject().get("trashed").getAsBoolean()) return;
+        } catch (RuntimeException invalid) { throw new IOException("Invalid checkpoint metadata", invalid); }
+        var request = HttpRequest.newBuilder(URI.create("https://www.googleapis.com/drive/v3/files/" + object.fileId() + "?fields=id,trashed"))
+                .timeout(Duration.ofSeconds(30)).header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                .method("PATCH", HttpRequest.BodyPublishers.ofString("{\"trashed\":true}")).build();
+        var response = transport.send(request);
+        if (response == null || response.status() != 200) throw new IOException("Checkpoint trash failed");
+        try {
+            var json = JsonParser.parseString(new String(response.body(), StandardCharsets.UTF_8)).getAsJsonObject();
+            if (!object.fileId().equals(json.get("id").getAsString()) || !json.get("trashed").getAsBoolean()) throw new IOException("Checkpoint trash not confirmed");
+        } catch (RuntimeException invalid) { throw new IOException("Invalid trash response", invalid); }
+    }
+
     @Override public boolean canUseBase(ObjectRef object, String folder, String accessToken) throws IOException, InterruptedException {
         if (object == null || object.fileId() == null || !object.fileId().matches("[A-Za-z0-9_-]{1,200}")
                 || object.sha256() == null || !object.sha256().matches("[0-9a-f]{64}") || object.size() < 1 || object.size() > MAX_SIZE
@@ -264,6 +290,10 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
     }
 
     private static ObjectRef validateMetadata(Reply response, String folder, String name, String hash, long size) throws IOException {
+        return validateMetadata(response, folder, name, hash, size, false);
+    }
+
+    private static ObjectRef validateMetadata(Reply response, String folder, String name, String hash, long size, boolean allowTrashed) throws IOException {
         try {
             var json = JsonParser.parseString(new String(response.body(), StandardCharsets.UTF_8)).getAsJsonObject();
             String id = json.get("id").getAsString();
@@ -271,7 +301,7 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
             for (var item : json.getAsJsonArray("parents")) if (folder.equals(item.getAsString())) parentFound = true;
             if (!id.matches("[A-Za-z0-9_-]{1,200}") || !name.equals(json.get("name").getAsString())
                     || !hash.equals(json.get("sha256Checksum").getAsString()) || size != Long.parseLong(json.get("size").getAsString())
-                    || !parentFound || !json.has("trashed") || json.get("trashed").getAsBoolean())
+                    || !parentFound || !json.has("trashed") || (!allowTrashed && json.get("trashed").getAsBoolean()))
                 throw new IOException("Drive object verification failed");
             return new ObjectRef(id, hash, size);
         } catch (RuntimeException invalid) { throw new IOException("Invalid Drive object metadata", invalid); }

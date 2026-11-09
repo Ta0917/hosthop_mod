@@ -9,6 +9,7 @@ import unittest
 import lease_model
 
 SCHEMA = (Path(__file__).parent / "d1" / "schema.sql").read_text(encoding="utf-8")
+CHECKPOINT_SCHEMA = (Path(__file__).parent / "d1" / "checkpoint_migration.sql").read_text(encoding="utf-8")
 COMMIT = (Path(__file__).parent / "d1" / "commit.sql").read_text(encoding="utf-8")
 ACQUIRE = (Path(__file__).parent / "d1" / "acquire.sql").read_text(encoding="utf-8")
 ACQUIRE_STATUS = (Path(__file__).parent / "d1" / "acquire_status.sql").read_text(encoding="utf-8")
@@ -23,6 +24,7 @@ class D1SqlTest(unittest.TestCase):
         self.db = str(Path(self.tmp.name) / "db.sqlite")
         with lease_model.connection(self.db) as c:
             c.executescript(SCHEMA)
+            c.executescript(CHECKPOINT_SCHEMA)
             c.execute("INSERT INTO worlds (id, owner, lease_id, epoch, expires) VALUES (?, ?, ?, ?, ?)", ("w", "a", "lease-a", 1, int(time.time()) + 300))
 
     def attempt(self, operation_id, digest="hash-a", owner="a", lease_id="lease-a", epoch=1, generation=0):

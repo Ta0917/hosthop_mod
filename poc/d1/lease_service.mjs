@@ -37,14 +37,17 @@ async function readJson(request) {
 export function createLeaseService(sql, verifyObject = verifyDriveObject) {
   if (!sql?.acquire || !sql?.renew || !sql?.acquireStatus || !sql?.endpointUpdate || !sql?.endpointStatus || !sql?.endpointRevision
       || !sql?.commit || !sql?.commitStatus || !sql?.snapshotStatus || !sql?.release || !sql?.releaseStatus || !sql?.abort || !sql?.abortStatus || !sql?.hostStatus
-      || !sql?.cancelAcquisition || !sql?.cancelAcquisitionStatus || !sql?.history || !sql?.recoverStopped)
+      || !sql?.cancelAcquisition || !sql?.cancelAcquisitionStatus || !sql?.history || !sql?.recoverStopped
+      || !sql?.checkpoint || !sql?.checkpointStatus || !sql?.checkpointHistory || !sql?.checkpointFull
+      || !sql?.checkpointDelete || !sql?.checkpointDeleteStatus || !sql?.checkpointRetention || !sql?.checkpointRetentionSet || !sql?.checkpointPrune || !sql?.checkpointPruneDelete
+      || !sql?.checkpointTrashPending || !sql?.checkpointTrashDone)
     throw new Error('missing SQL');
   return {
     async fetch(request, env) {
       if (request.method !== 'POST') return json({ error: 'not found' }, 404);
       const route = new URL(request.url).pathname;
       if (!['/acquire', '/renew', '/acquire-status', '/endpoint-update', '/endpoint-status', '/endpoint-revision',
-        '/commit', '/commit-status', '/recover-stopped', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/cancel-acquisition', '/history'].includes(route))
+        '/commit', '/commit-status', '/recover-stopped', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/cancel-acquisition', '/history', '/checkpoint', '/checkpoint-status', '/checkpoint-history', '/checkpoint-full', '/checkpoint-delete', '/checkpoint-retention', '/checkpoint-retention-set', '/checkpoint-prune', '/checkpoint-prune-delete', '/checkpoint-trash-pending', '/checkpoint-trash-done'].includes(route))
         return json({ error: 'not found' }, 404);
       const auth = request.headers.get('Authorization') || '';
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -53,7 +56,7 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       try { body = await readJson(request); } catch { return json({ error: 'invalid request' }, 400); }
       if (!body || Array.isArray(body) || typeof body !== 'object' || !identifier(body.world))
         return json({ error: 'invalid request' }, 400);
-      if (!['/endpoint-status', '/snapshot-status', '/host-status', '/history'].includes(route) && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
+      if (!['/endpoint-status', '/snapshot-status', '/host-status', '/history', '/checkpoint-history', '/checkpoint-full', '/checkpoint-delete', '/checkpoint-retention', '/checkpoint-retention-set', '/checkpoint-prune', '/checkpoint-prune-delete', '/checkpoint-trash-pending', '/checkpoint-trash-done'].includes(route) && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
       if (['/acquire', '/renew', '/acquire-status'].includes(route)
           && (!Number.isSafeInteger(body.duration) || body.duration < 1 || body.duration > 300))
         return json({ error: 'invalid request' }, 400);
@@ -74,6 +77,17 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
         return json({ error: 'invalid request' }, 400);
       if (route === '/abort' && (!Number.isSafeInteger(body.baseGeneration) || body.baseGeneration < 0))
         return json({ error: 'invalid request' }, 400);
+      if (['/checkpoint', '/checkpoint-status'].includes(route) && (!identifier(body.checkpoint)
+          || !Number.isSafeInteger(body.epoch) || body.epoch < 1 || !Number.isSafeInteger(body.generation) || body.generation < 0
+          || typeof body.digest !== 'string' || !/^[0-9a-f]{64}$/.test(body.digest)
+          || typeof body.fileId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(body.fileId)
+          || !Number.isSafeInteger(body.size) || body.size < 1 || body.size > 68_719_476_736
+          || !['full', 'delta'].includes(body.kind))) return json({ error: 'invalid request' }, 400);
+      if (['/checkpoint-delete', '/checkpoint-prune-delete', '/checkpoint-trash-done'].includes(route) && (!identifier(body.checkpoint) || typeof body.digest !== 'string' || !/^[0-9a-f]{64}$/.test(body.digest)
+          || typeof body.fileId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(body.fileId)
+          || !Number.isSafeInteger(body.size) || body.size < 1 || body.size > 68_719_476_736)) return json({ error: 'invalid request' }, 400);
+      if (route === '/checkpoint-retention-set' && (!Number.isSafeInteger(body.keep) || body.keep < 1 || body.keep > 28)) return json({ error: 'invalid request' }, 400);
+      if (route === '/checkpoint-prune-delete' && (!Number.isSafeInteger(body.keep) || body.keep < 1 || body.keep > 28)) return json({ error: 'invalid request' }, 400);
       // A high-entropy bearer token identifies a single owner in a single world.
       // The experiment does not implement provisioning, rotation, or revocation.
       const tokenHash = await digestToken(token);
@@ -82,6 +96,61 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       if (route === '/history') {
         const rows = await env.DB.prepare(sql.history).bind(body.world).all();
         return json({ snapshots: rows.results });
+      }
+      if (route === '/checkpoint-history') {
+        const rows = await env.DB.prepare(sql.checkpointHistory).bind(body.world).all();
+        return json({ checkpoints: rows.results });
+      }
+      if (route === '/checkpoint-prune') {
+        const rows = await env.DB.prepare(sql.checkpointPrune).bind(body.world, member.owner).all();
+        return json({ checkpoints: rows.results });
+      }
+      if (route === '/checkpoint-trash-pending') {
+        const rows = await env.DB.prepare(sql.checkpointTrashPending).bind(body.world, member.owner).all();
+        return json({ checkpoints: rows.results });
+      }
+      if (route === '/checkpoint-trash-done') {
+        const receipt = await env.DB.prepare(sql.checkpointTrashDone).bind(body.world, body.checkpoint, body.fileId, body.digest, body.size).first();
+        return receipt ? json(receipt) : json({ error: 'unknown deletion' }, 404);
+      }
+      if (route === '/checkpoint-retention' || route === '/checkpoint-retention-set') {
+        const row = route === '/checkpoint-retention' ? await env.DB.prepare(sql.checkpointRetention).bind(body.world).first()
+          : await env.DB.prepare(sql.checkpointRetentionSet).bind(body.world, body.keep).first();
+        return row ? json(row) : json({ error: 'unknown world' }, 404);
+      }
+      if (route === '/checkpoint-full') {
+        const row = await env.DB.prepare(sql.checkpointFull).bind(body.world).first();
+        return row ? json(row) : json({ error: 'checkpoint status unavailable' }, 503);
+      }
+      if (route === '/checkpoint-delete' || route === '/checkpoint-prune-delete') {
+        const find = () => env.DB.prepare(sql.checkpointDeleteStatus).bind(body.world, body.checkpoint).first();
+        const matches = row => row && row.object_id === body.fileId && row.digest === body.digest && row.object_size === body.size;
+        let receipt = await find();
+        if (receipt) return matches(receipt) ? json(receipt) : json({ error: 'deletion conflict' }, 409);
+        const statement = env.DB.prepare(route === '/checkpoint-delete' ? sql.checkpointDelete : sql.checkpointPruneDelete);
+        await (route === '/checkpoint-delete' ? statement.bind(body.world, body.checkpoint, body.fileId, body.digest, body.size)
+          : statement.bind(body.world, body.checkpoint, body.fileId, body.digest, body.size, body.keep, member.owner)).run();
+        receipt = await find();
+        return matches(receipt) ? json(receipt) : json({ error: 'protected checkpoint' }, 409);
+      }
+      if (route === '/checkpoint' || route === '/checkpoint-status') {
+        const find = () => env.DB.prepare(sql.checkpointStatus).bind(body.world, body.checkpoint).first();
+        const matches = row => row && row.owner === member.owner && row.lease_id === body.lease && row.epoch === body.epoch
+          && row.generation === body.generation && row.digest === body.digest && row.object_id === body.fileId
+          && row.object_size === body.size && row.kind === body.kind;
+        let receipt = await find();
+        if (receipt) return matches(receipt) ? json(receipt) : json({ error: 'checkpoint conflict' }, 409);
+        if (route === '/checkpoint-status') return json({ error: 'unknown checkpoint' }, 404);
+        const world = env.WORLDS?.find(item => item.id === body.world);
+        if (!world || typeof world.folder !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(world.folder)
+            || typeof body.driveToken !== 'string' || body.driveToken.length < 1 || body.driveToken.length > 2048
+            || /[\x00-\x20\x7f]/.test(body.driveToken)) return json({ error: 'invalid request' }, 400);
+        if (!await verifyObject({ folder: world.folder, fileId: body.fileId, digest: body.digest, size: body.size, accessToken: body.driveToken }))
+          return json({ error: 'snapshot verification failed' }, 422);
+        await env.DB.prepare(sql.checkpoint).bind(body.world, body.checkpoint, member.owner, body.lease,
+          body.epoch, body.generation, body.digest, body.fileId, body.size, body.kind).run();
+        receipt = await find();
+        return matches(receipt) ? json(receipt) : json({ error: 'lease conflict' }, 409);
       }
       if (route === '/cancel-acquisition') {
         // The caller must have stopped its local process and never started the server.

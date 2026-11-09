@@ -17,3 +17,5 @@ Driveの `drive.file` 権限はファイル単位なので、別のメンバー�
 管理APIの配備には `node service/build.mjs` で生成したWorkerと `service/wrangler.example.toml` を使う。D1を新規作成し、生成されたIDをGit管理外の `service/wrangler.toml` に設定してから、空のデータベースにスキーマと初期ワールドSQLを順に適用する。既存データベースにスキーマを再適用しない。[CloudflareのD1手順](https://developers.cloudflare.com/d1/get-started/)では、実際のデータベースへのSQL適用に `--remote` が必要とされている。Workerのシークレットに上記JSONを登録し、生成したURLを招待コードの `authority` に設定する。配備と実アカウントでの確認はまだ実施していない。
 
 期限切れの停止済みホストを復旧するWorkerには、`poc/d1/recover_stopped_migration.sql` を先に適用する。これは追加のテーブルとトリガーだけを作り、既存のワールドや保存記録を削除しない。新規データベースにもスキーマの後で適用する。実環境への適用後にWorkerを配備し、必ず隔離ワールドで確認する。復旧操作は、元のホストとリレーの停止をクライアントが確認した場合に限る。サーバー側の期限切れだけでは停止を証明できない。
+
+定期バックアップ対応のWorkerを配備する前に、`poc/d1/checkpoint_migration.sql` も適用する。新しい管理APIと公開処理はこの追加スキーマを必要とするため、Workerより先に適用する。履歴から削除した差分は削除記録を残してからDriveのゴミ箱に移し、途中で失敗した場合は作成者が次回ホストするときに再試行する。完全バックアップは差分の基準として保護するため、保持数によって削除されず、Driveの使用量は増え続ける。

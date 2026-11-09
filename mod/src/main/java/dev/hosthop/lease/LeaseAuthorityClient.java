@@ -49,6 +49,7 @@ public final class LeaseAuthorityClient {
     public record Endpoint(String world, long epoch, long generation, long revision, String address,
                            ConservativeLeaseDeadline deadline) {}
     public record Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object) {}
+    public record Checkpoint(String id, long generation, GoogleDriveSnapshotStore.ObjectRef object, String kind, long createdAt) {}
     public record EndpointLease(long epoch, long revision, String address, ConservativeLeaseDeadline deadline) {}
     public record HostStatus(boolean held, Endpoint endpoint) {}
     @FunctionalInterface public interface Exchange { Reply send(HttpRequest request) throws IOException, InterruptedException; }
@@ -276,6 +277,123 @@ public final class LeaseAuthorityClient {
         return matchPublication(operation, post("commit-status", publicationBody(operation)));
     }
 
+    /** Record a verified snapshot without advancing or releasing the active lease. */
+    public CheckpointRecord checkpoint(CheckpointRecord operation, String driveToken) throws IOException, InterruptedException {
+        if (operation == null || driveToken == null || driveToken.isBlank() || driveToken.length() > 2048
+                || driveToken.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException("Invalid checkpoint");
+        var body = new JsonObject();
+        body.addProperty("world", operation.world()); body.addProperty("checkpoint", operation.id());
+        body.addProperty("lease", operation.lease()); body.addProperty("epoch", operation.epoch());
+        body.addProperty("generation", operation.generation()); body.addProperty("digest", operation.object().sha256());
+        body.addProperty("fileId", operation.object().fileId()); body.addProperty("size", operation.object().size());
+        body.addProperty("kind", operation.kind()); body.addProperty("driveToken", driveToken);
+        var fields = post("checkpoint", body);
+        var s = fields.strings(); var n = fields.numbers();
+        if (!operation.world().equals(s.get("world_id")) || !operation.id().equals(s.get("checkpoint_id"))
+                || !operation.owner().equals(s.get("owner")) || !operation.lease().equals(s.get("lease_id"))
+                || !operation.object().fileId().equals(s.get("object_id")) || !operation.object().sha256().equals(s.get("digest"))
+                || !operation.kind().equals(s.get("kind")) || operation.epoch() != required(n, "epoch")
+                || operation.generation() != required(n, "generation") || operation.object().size() != required(n, "object_size"))
+            throw new IOException("Checkpoint receipt mismatch");
+        return new CheckpointRecord(operation.world(), operation.id(), operation.owner(), operation.lease(), operation.epoch(),
+                operation.generation(), operation.object(), operation.kind(), required(n, "created_at"));
+    }
+
+    public boolean fullCheckpointDue(String world) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID)) throw new IllegalArgumentException("Invalid world");
+        var body = new JsonObject(); body.addProperty("world", world);
+        var fields = post("checkpoint-full", body).numbers();
+        long value = required(fields, "created_at"), now = required(fields, "server_now");
+        if (value < 0 || now < 0) throw new IOException("Invalid checkpoint time");
+        return value == 0 || now < value || now - value >= 24 * 60 * 60;
+    }
+
+    public List<Checkpoint> checkpointHistory(String world) throws IOException, InterruptedException {
+        return checkpoints(world, "checkpoint-history");
+    }
+
+    public List<Checkpoint> checkpointPruneCandidates(String world) throws IOException, InterruptedException {
+        return checkpoints(world, "checkpoint-prune");
+    }
+
+    public List<Checkpoint> checkpointTrashPending(String world) throws IOException, InterruptedException {
+        return checkpoints(world, "checkpoint-trash-pending");
+    }
+
+    public void checkpointTrashDone(String world, Checkpoint checkpoint) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID) || checkpoint == null || !"delta".equals(checkpoint.kind())) throw new IllegalArgumentException("Invalid checkpoint");
+        var body = new JsonObject(); body.addProperty("world", world); body.addProperty("checkpoint", checkpoint.id());
+        body.addProperty("fileId", checkpoint.object().fileId()); body.addProperty("digest", checkpoint.object().sha256()); body.addProperty("size", checkpoint.object().size());
+        var fields = post("checkpoint-trash-done", body);
+        if (!world.equals(fields.strings().get("world_id")) || !checkpoint.id().equals(fields.strings().get("checkpoint_id"))
+                || !checkpoint.object().fileId().equals(fields.strings().get("object_id")) || !checkpoint.object().sha256().equals(fields.strings().get("digest"))
+                || checkpoint.object().size() != required(fields.numbers(), "object_size")) throw new IOException("Checkpoint cleanup receipt mismatch");
+    }
+
+    private List<Checkpoint> checkpoints(String world, String route) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID)) throw new IllegalArgumentException("Invalid world");
+        var request = HttpRequest.newBuilder(base.resolve("/" + route)).timeout(Duration.ofSeconds(10))
+                .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"world\":\"" + world + "\"}", StandardCharsets.UTF_8)).build();
+        var reply = exchange.send(request);
+        if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES) throw new IOException("Checkpoint history unavailable");
+        try {
+            var root = com.google.gson.JsonParser.parseString(reply.body()).getAsJsonObject();
+            var array = root.getAsJsonArray("checkpoints");
+            if (array == null || array.size() > 32) throw new IOException("Invalid checkpoint history");
+            var result = new java.util.ArrayList<Checkpoint>();
+            var ids = new HashSet<String>();
+            long previous = Long.MAX_VALUE;
+            for (var element : array) {
+                var item = element.getAsJsonObject();
+                String id = item.get("checkpoint_id").getAsString(), digest = item.get("digest").getAsString();
+                String file = item.get("object_id").getAsString(), kind = item.get("kind").getAsString();
+                long generation = item.get("generation").getAsLong(), size = item.get("object_size").getAsLong(), created = item.get("created_at").getAsLong();
+                if (!id.matches(ID) || !ids.add(id) || !digest.matches("[0-9a-f]{64}") || !file.matches("[A-Za-z0-9_-]{1,200}")
+                        || !(kind.equals("full") || kind.equals("delta")) || generation < 0 || size < 1 || size > 68_719_476_736L
+                        || created < 1 || created > previous) throw new IOException("Invalid checkpoint history");
+                result.add(new Checkpoint(id, generation, new GoogleDriveSnapshotStore.ObjectRef(file, digest, size), kind, created));
+                previous = created;
+            }
+            return List.copyOf(result);
+        } catch (RuntimeException invalid) { throw new IOException("Invalid checkpoint history", invalid); }
+    }
+
+    public int checkpointRetention(String world) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID)) throw new IllegalArgumentException("Invalid world");
+        var body = new JsonObject(); body.addProperty("world", world);
+        long value = required(post("checkpoint-retention", body).numbers(), "keep_delta");
+        if (value < 1 || value > 28) throw new IOException("Invalid retention setting");
+        return (int) value;
+    }
+
+    public void setCheckpointRetention(String world, int keep) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID) || keep < 1 || keep > 28) throw new IllegalArgumentException("Invalid retention setting");
+        var body = new JsonObject(); body.addProperty("world", world); body.addProperty("keep", keep);
+        if (required(post("checkpoint-retention-set", body).numbers(), "keep_delta") != keep) throw new IOException("Retention setting mismatch");
+    }
+
+    /** Forget only a delta checkpoint after the caller has confirmed deletion. */
+    public void deleteCheckpoint(String world, Checkpoint checkpoint) throws IOException, InterruptedException {
+        deleteCheckpoint(world, checkpoint, 0);
+    }
+
+    public void pruneCheckpoint(String world, Checkpoint checkpoint, int keep) throws IOException, InterruptedException {
+        if (keep < 1 || keep > 28) throw new IllegalArgumentException("Invalid retention setting");
+        deleteCheckpoint(world, checkpoint, keep);
+    }
+
+    private void deleteCheckpoint(String world, Checkpoint checkpoint, int keep) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID) || checkpoint == null || !"delta".equals(checkpoint.kind())) throw new IllegalArgumentException("Protected checkpoint");
+        var body = new JsonObject(); body.addProperty("world", world); body.addProperty("checkpoint", checkpoint.id());
+        body.addProperty("fileId", checkpoint.object().fileId()); body.addProperty("digest", checkpoint.object().sha256()); body.addProperty("size", checkpoint.object().size());
+        if (keep != 0) body.addProperty("keep", keep);
+        var fields = post(keep == 0 ? "checkpoint-delete" : "checkpoint-prune-delete", body);
+        if (!world.equals(fields.strings().get("world_id")) || !checkpoint.id().equals(fields.strings().get("checkpoint_id"))
+                || !checkpoint.object().fileId().equals(fields.strings().get("object_id")) || !checkpoint.object().sha256().equals(fields.strings().get("digest"))
+                || checkpoint.object().size() != required(fields.numbers(), "object_size")) throw new IOException("Checkpoint deletion receipt mismatch");
+    }
+
     /** Only a verified stopped host may request atomic publication and release of its expired lease. */
     public PublicationRecord recoverStopped(PublicationRecord operation, String driveToken) throws IOException, InterruptedException {
         if (driveToken == null || driveToken.isBlank() || driveToken.length() > 2048 || driveToken.chars().anyMatch(Character::isISOControl))
@@ -396,12 +514,12 @@ public final class LeaseAuthorityClient {
                 if (name.equals("epoch") || name.equals("generation") || name.equals("base_generation")
                         || name.equals("duration_seconds") || name.equals("active") || name.equals("held") || name.equals("endpoint_revision")
                         || name.equals("previous_generation") || name.equals("result_generation") || name.equals("object_size")
-                        || name.equals("server_now") || name.equals("expires")) {
+                        || name.equals("server_now") || name.equals("expires") || name.equals("created_at") || name.equals("keep_delta")) {
                     if (reader.peek() != JsonToken.NUMBER) throw new IOException("Invalid response field");
                     String value = reader.nextString();
                     if (!value.matches("-?(0|[1-9][0-9]*)")) throw new IOException("Invalid response number");
                     values.put(name, Long.parseLong(value));
-                } else if (java.util.Set.of("owner", "endpoint", "world_id", "operation_id", "lease_id", "digest", "object_id").contains(name)) {
+                } else if (java.util.Set.of("owner", "endpoint", "world_id", "operation_id", "lease_id", "digest", "object_id", "checkpoint_id", "kind").contains(name)) {
                     if (name.equals("endpoint") && reader.peek() == JsonToken.NULL) { reader.nextNull(); continue; }
                     if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid response text");
                     strings.put(name, reader.nextString());

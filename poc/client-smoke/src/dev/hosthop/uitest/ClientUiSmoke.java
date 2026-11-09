@@ -39,6 +39,26 @@ public final class ClientUiSmoke {
                 @Override public int modifiers() { return 0; }
             });
             if (!(minecraft.gui.screen() instanceof dev.hosthop.client.HostHopHistoryScreen)) throw new IllegalStateException("History screen did not open");
+            var checkpoints = minecraft.gui.screen().children().stream().filter(child -> child instanceof Button b
+                    && b.getMessage().getString().equals("Scheduled backups")).map(Button.class::cast).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("Scheduled backups button missing"));
+            checkpoints.onPress(new net.minecraft.client.input.InputWithModifiers() {
+                @Override public int input() { return 257; }
+                @Override public int modifiers() { return 0; }
+            });
+            if (!(minecraft.gui.screen() instanceof dev.hosthop.client.HostHopCheckpointScreen)) throw new IllegalStateException("Scheduled backup screen did not open");
+            var retention = minecraft.gui.screen().children().stream().filter(child -> child instanceof Button b
+                    && b.getMessage().getString().equals("Retention")).map(Button.class::cast).findFirst()
+                    .orElseThrow(() -> new IllegalStateException("Retention button missing"));
+            retention.onPress(new net.minecraft.client.input.InputWithModifiers() {
+                @Override public int input() { return 257; }
+                @Override public int modifiers() { return 0; }
+            });
+            if (!(minecraft.gui.screen() instanceof dev.hosthop.client.HostHopBackupSettingsScreen)) throw new IllegalStateException("Retention settings did not open");
+            minecraft.gui.screen().onClose();
+            if (!(minecraft.gui.screen() instanceof dev.hosthop.client.HostHopCheckpointScreen)) throw new IllegalStateException("Retention back failed");
+            minecraft.gui.screen().onClose();
+            if (!(minecraft.gui.screen() instanceof dev.hosthop.client.HostHopHistoryScreen)) throw new IllegalStateException("Scheduled backup back failed");
             minecraft.gui.screen().onClose();
             if (!(minecraft.gui.screen() instanceof HostHopScreen)) throw new IllegalStateException("History back failed");
             var hostScreen = minecraft.gui.screen();

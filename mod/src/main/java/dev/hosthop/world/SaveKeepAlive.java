@@ -42,7 +42,7 @@ public final class SaveKeepAlive implements AutoCloseable {
     }
     public static boolean waitingForCompletion() { return waitingForCompletion; }
     public static boolean suppressWatchdog(String callsite, boolean hostActive) {
-        return ("post-main".equals(callsite) && active()) || ("window close callback".equals(callsite) && hostActive);
+        return ("post-main".equals(callsite) && active()) || ("window close callback".equals(callsite) && (hostActive || active()));
     }
     @Override public void close() { finished.countDown(); }
 }

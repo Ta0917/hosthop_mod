@@ -6,6 +6,7 @@ import dev.hosthop.lease.LocalHostGate;
 import dev.hosthop.lease.PendingPublicationJournal;
 import dev.hosthop.lease.PublicationPreparation;
 import dev.hosthop.lease.PublicationRecord;
+import dev.hosthop.lease.CheckpointRecord;
 import dev.hosthop.snapshot.SnapshotVerifier;
 import dev.hosthop.snapshot.SnapshotWriter;
 import dev.hosthop.snapshot.StoppedWorldLock;
@@ -57,6 +58,47 @@ public final class SharedWorldTransfer {
     public void prepare(LeaseCoordinator.Acquisition acquisition, Path initialCopy, Path archive, Path destination,
                         String driveToken) throws IOException, InterruptedException {
         prepare(acquisition, initialCopy, archive, destination, driveToken, null);
+    }
+
+    /** Publish an isolated copy while the original server keeps its lease. */
+    public CheckpointRecord publishCheckpoint(LeaseCoordinator.Acquisition acquisition, Path copiedWorld, Path directory,
+                                               String folder, String token, boolean full) throws IOException, InterruptedException {
+        if (acquisition == null || !gate.mayContinueHosting(acquisition.attempt(), nanos.getAsLong(), millis.getAsLong()))
+            throw new IOException("Host lease is not active");
+        Path archive = directory.resolve("checkpoint.zip");
+        SnapshotWriter.create(copiedWorld, archive);
+        Path upload = archive;
+        if (!full && baseRef != null && baseArchive != null && storage.canUseBase(baseRef, folder, token)) {
+            Path delta = directory.resolve("checkpoint-delta.bin"), verified = directory.resolve("checkpoint-verified.zip");
+            boolean created = false, verifiedCreated = false;
+            try {
+                BinaryDelta.create(baseArchive, baseRef, archive, delta); created = true;
+                if (Files.size(delta) < Files.size(archive) * 3 / 4) {
+                    BinaryDelta.apply(delta, baseArchive, verified); verifiedCreated = true;
+                    if (Files.mismatch(archive, verified) != -1) throw new IOException("Checkpoint delta mismatch");
+                    upload = delta;
+                } else Files.delete(delta);
+            } catch (IOException invalid) {
+                if (created) Files.deleteIfExists(delta);
+            } finally { if (verifiedCreated) Files.deleteIfExists(verified); }
+        }
+        var object = storage.upload(upload, folder, token);
+        if (!upload.equals(archive) && !storage.canUseBase(baseRef, folder, token)) throw new IOException("Checkpoint base unavailable");
+        if (!gate.mayContinueHosting(acquisition.attempt(), nanos.getAsLong(), millis.getAsLong())) throw new IOException("Host lease expired during checkpoint");
+        var operation = new CheckpointRecord(acquisition.world(), java.util.UUID.randomUUID().toString(), acquisition.principal(),
+                acquisition.lease(), acquisition.epoch(), acquisition.generation(), object, upload.equals(archive) ? "full" : "delta", 0);
+        // Same ID and content make a lost response safe to retry.
+        try { return authority.checkpoint(operation, token); }
+        catch (IOException first) { return authority.checkpoint(operation, token); }
+    }
+
+    /** A verified, committed full checkpoint can become the next delta base. */
+    public Path adoptCheckpointBase(CheckpointRecord checkpoint, Path archive) throws IOException {
+        if (checkpoint == null || !"full".equals(checkpoint.kind()) || archive == null || !Files.isRegularFile(archive))
+            throw new IOException("Invalid checkpoint base");
+        Path previous = baseArchive;
+        baseRef = checkpoint.object(); baseArchive = archive;
+        return previous;
     }
 
     public void prepare(LeaseCoordinator.Acquisition acquisition, Path initialCopy, Path archive, Path destination,

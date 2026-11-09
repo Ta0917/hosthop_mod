@@ -40,6 +40,7 @@ function leaseStatement(statement, leaseId) {
 }
 
 run(['--file', join(here, 'schema.sql')]);
+run(['--file', join(here, 'checkpoint_migration.sql')]);
 run(['--command', "INSERT INTO worlds (id, owner, lease_id, epoch, expires) VALUES ('test-world', 'test-owner', 'lease-1', 1, unixepoch('now') + 300); INSERT INTO worlds (id) VALUES ('lease-world');"]);
 const leases = run(['--command', `${leaseStatement(acquire, 'lease-1')}\n${leaseStatement(acquire, 'lease-2')}\n${leaseStatement(renew, 'wrong')}\n${leaseStatement(renew, 'lease-1')}`]);
 check(leases[0].results[0].epoch === 1 && leases[1].results.length === 0, 'concurrent lease was not excluded');

@@ -14,8 +14,32 @@ import java.util.UUID;
 public final class BackupRestore {
     private BackupRestore() {}
 
+    @FunctionalInterface public interface AccessGrant {
+        String ensure(dev.hosthop.storage.GoogleDriveSnapshotStore.ObjectRef object, String token) throws IOException, InterruptedException;
+    }
+
     public static String restore(LeaseAuthorityClient.Snapshot snapshot, SnapshotStore storage, String token, Path game) throws IOException, InterruptedException {
         if (snapshot == null || snapshot.generation() < 1 || storage == null || token == null) throw new IOException("Invalid backup");
+        return restore(snapshot, storage, token, game, (object, current) -> current);
+    }
+
+    public static String restore(LeaseAuthorityClient.Snapshot snapshot, SnapshotStore storage, String token, Path game, AccessGrant grant) throws IOException, InterruptedException {
+        if (snapshot == null || snapshot.generation() < 1 || storage == null || token == null || grant == null) throw new IOException("Invalid backup");
+        return restoreObject(snapshot.object(), Long.toString(snapshot.generation()), storage, token, game, grant);
+    }
+
+    public static String restore(LeaseAuthorityClient.Checkpoint checkpoint, SnapshotStore storage, String token, Path game) throws IOException, InterruptedException {
+        if (checkpoint == null || storage == null || token == null) throw new IOException("Invalid checkpoint");
+        return restore(checkpoint, storage, token, game, (object, current) -> current);
+    }
+
+    public static String restore(LeaseAuthorityClient.Checkpoint checkpoint, SnapshotStore storage, String token, Path game, AccessGrant grant) throws IOException, InterruptedException {
+        if (checkpoint == null || storage == null || token == null || grant == null) throw new IOException("Invalid checkpoint");
+        return restoreObject(checkpoint.object(), "checkpoint_" + checkpoint.createdAt(), storage, token, game, grant);
+    }
+
+    private static String restoreObject(dev.hosthop.storage.GoogleDriveSnapshotStore.ObjectRef reference, String label,
+                                        SnapshotStore storage, String token, Path game, AccessGrant grant) throws IOException, InterruptedException {
         Path root = game.toRealPath();
         Path saves = root.resolve("saves");
         if (!Files.isDirectory(saves, LinkOption.NOFOLLOW_LINKS) || !saves.toRealPath().startsWith(root)) throw new IOException("Invalid saves directory");
@@ -24,15 +48,17 @@ public final class BackupRestore {
         if (!sessions.toRealPath().startsWith(root)) throw new IOException("Invalid sessions directory");
         Path workspace = Files.createTempDirectory(sessions, "backup-restore-");
         Path object = workspace.resolve("object.bin"), archive = object;
-        storage.downloadRaw(snapshot.object(), object, token);
+        token = grant.ensure(reference, token);
+        storage.downloadRaw(reference, object, token);
         if (BinaryDelta.isDelta(object)) {
             var info = BinaryDelta.inspect(object);
             Path base = workspace.resolve("base.zip");
+            token = grant.ensure(info.base(), token);
             storage.download(info.base(), base, token);
             archive = workspace.resolve("restored.zip");
             BinaryDelta.apply(object, base, archive);
         } else SnapshotVerifier.verify(object);
-        String name = "hosthop_backup_" + snapshot.generation() + "_" + UUID.randomUUID().toString().replace("-", "");
+        String name = "hosthop_backup_" + label + "_" + UUID.randomUUID().toString().replace("-", "");
         SnapshotVerifier.restore(archive, saves.resolve(name));
         return name;
     }

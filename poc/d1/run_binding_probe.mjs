@@ -14,6 +14,19 @@ const load = name => readFileSync(join(here, name), 'utf8');
 const schema = load('schema.sql').replace(/^--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
 const recoveryMigration = load('recover_stopped_migration.sql').replace(/^\s*--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
 const recoverStopped = load('recover_stopped.sql');
+const checkpoint = load('checkpoint.sql');
+const checkpointStatus = load('checkpoint_status.sql');
+const checkpointHistory = load('checkpoint_history.sql');
+const checkpointFull = load('checkpoint_full.sql');
+const checkpointMigration = load('checkpoint_migration.sql').replace(/^\s*--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER|UNIQUE INDEX) )/).map(s => s.trim()).filter(Boolean);
+const checkpointDelete = load('checkpoint_delete.sql');
+const checkpointDeleteStatus = load('checkpoint_delete_status.sql');
+const checkpointRetention = load('checkpoint_retention.sql');
+const checkpointRetentionSet = load('checkpoint_retention_set.sql');
+const checkpointPrune = load('checkpoint_prune.sql');
+const checkpointPruneDelete = load('checkpoint_prune_delete.sql');
+const checkpointTrashPending = load('checkpoint_trash_pending.sql');
+const checkpointTrashDone = load('checkpoint_trash_done.sql');
 const acquire = load('acquire.sql');
 const acquireStatus = load('acquire_status.sql');
 const renew = load('renew.sql');
@@ -43,6 +56,7 @@ try {
   const db = await mf.getD1Database('DB');
   await db.batch(schema.map(statement => db.prepare(statement)));
   await db.batch(recoveryMigration.map(statement => db.prepare(statement)));
+  await db.batch(checkpointMigration.map(statement => db.prepare(statement)));
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('recovery-world').run();
   const recoveryGrant = await db.prepare(acquire).bind('recovery-world', 'owner', 'lease', 120).first();
   const recover = (owner, operation, generation = 0) => db.prepare(recoverStopped)
@@ -59,6 +73,9 @@ try {
   const successor = await db.prepare(acquire).bind('recovery-world', 'next', 'next-lease', 120).first();
   check(successor.epoch === recoveryGrant.epoch + 1 && successor.generation === 1, 'successor did not receive recovered generation');
   check((await recover('owner', 'late')).results.length === 0, 'old recovery affected successor');
+  await db.prepare(checkpoint).bind('recovery-world', 'protected', 'next', 'next-lease', successor.epoch, 1, 'a'.repeat(64), 'object', 42, 'delta').run();
+  await db.prepare(checkpointDelete).bind('recovery-world', 'protected', 'object', 'a'.repeat(64), 42).run();
+  check((await db.prepare(checkpointStatus).bind('recovery-world', 'protected').first()) != null, 'checkpoint referenced by shared head was deleted');
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('recovery-rollback').run();
   const rollbackGrant = await db.prepare(acquire).bind('recovery-rollback', 'owner', 'lease', 120).first();
   await db.prepare("UPDATE worlds SET expires=unixepoch('now') WHERE id=?1").bind('recovery-rollback').run();
@@ -149,7 +166,9 @@ try {
   const tokenHash = Array.from(new Uint8Array(tokenBytes), b => b.toString(16).padStart(2, '0')).join('');
   let objectVerified = false;
   const service = createLeaseService({ acquire, renew, acquireStatus, endpointUpdate, endpointStatus, endpointRevision,
-    commit, commitStatus, snapshotStatus, release, releaseStatus, abort, abortStatus, hostStatus, cancelAcquisition, cancelAcquisitionStatus, history, recoverStopped }, async () => objectVerified);
+    commit, commitStatus, snapshotStatus, release, releaseStatus, abort, abortStatus, hostStatus, cancelAcquisition, cancelAcquisitionStatus, history, recoverStopped,
+    checkpoint, checkpointStatus, checkpointHistory, checkpointFull, checkpointDelete, checkpointDeleteStatus,
+    checkpointRetention, checkpointRetentionSet, checkpointPrune, checkpointPruneDelete, checkpointTrashPending, checkpointTrashDone }, async () => objectVerified);
   const env = { DB: db, MEMBERS: [{ world: 'api-world', owner: 'api-owner', tokenHash }], WORLDS: [{ id: 'api-world', folder: 'folder' }] };
   const request = (route, body, credential = token) => service.fetch(new Request(`https://example.invalid/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
@@ -194,6 +213,52 @@ try {
   const grantResponse = await request('acquire', grantBody);
   check(grantResponse.status === 200, 'authorized grant failed');
   const grant = await grantResponse.json();
+  const checkpointBody = { world: 'api-world', lease: 'api-lease', epoch: grant.epoch, generation: 0,
+    checkpoint: 'checkpoint-one', digest: 'a'.repeat(64), fileId: 'checkpoint-file', size: 42, kind: 'delta', driveToken: 'token' };
+  objectVerified = false;
+  check((await request('checkpoint', checkpointBody)).status === 422, 'unverified checkpoint accepted');
+  objectVerified = true;
+  const checkpoints = await Promise.all(Array.from({length: 5}, () => request('checkpoint', checkpointBody)));
+  check(checkpoints.every(result => result.status === 200), 'checkpoint retry failed');
+  check((await request('checkpoint', { ...checkpointBody, digest: 'b'.repeat(64) })).status === 409, 'checkpoint identity reused');
+  check((await request('checkpoint', { ...checkpointBody, checkpoint: 'alias', kind: 'full' })).status === 409, 'checkpoint object used with conflicting kind');
+  check((await request('checkpoint', { ...checkpointBody, checkpoint: 'stale', epoch: grant.epoch + 1 })).status === 409, 'stale checkpoint accepted');
+  check((await (await request('checkpoint-history', { world: 'api-world' })).json()).checkpoints.length === 1, 'checkpoint history mismatch');
+  for (let i = 0; i < 40; i++) {
+    await db.prepare(checkpoint).bind('api-world', `list-${i}`, 'api-owner', 'api-lease', grant.epoch, 0,
+      'a'.repeat(64), `file-${i}`, 42, i < 4 ? 'full' : 'delta').run();
+  }
+  const checkpointRows = (await db.prepare(checkpointHistory).bind('api-world').all()).results;
+  check(checkpointRows.length === 32 && checkpointRows.filter(row => row.kind === 'full').length === 4,
+    'recent full backups were hidden by frequent deltas');
+  check((await (await request('checkpoint-retention', { world: 'api-world' })).json()).keep_delta === 4, 'default retention mismatch');
+  check((await request('checkpoint-retention-set', { world: 'api-world', keep: 0 })).status === 400, 'invalid retention accepted');
+  check((await (await request('checkpoint-retention-set', { world: 'api-world', keep: 6 })).json()).keep_delta === 6, 'retention not updated');
+  const pruneCandidates = (await (await request('checkpoint-prune', { world: 'api-world' })).json()).checkpoints;
+  check(pruneCandidates.length === 2 && pruneCandidates.every(row => row.kind === 'delta'), 'prune candidates included protected full backups');
+  const pruneBody = { world: 'api-world', checkpoint: pruneCandidates[0].checkpoint_id, fileId: pruneCandidates[0].object_id,
+    digest: pruneCandidates[0].digest, size: pruneCandidates[0].object_size, keep: 6 };
+  check((await request('checkpoint-retention-set', { world: 'api-world', keep: 28 })).status === 200, 'retention increase failed');
+  check((await request('checkpoint-prune-delete', pruneBody)).status === 409, 'stale retention deleted a checkpoint');
+  check((await request('checkpoint-retention-set', { world: 'api-world', keep: 6 })).status === 200, 'retention reset failed');
+  check((await request('checkpoint-prune-delete', pruneBody)).status === 200, 'eligible old checkpoint was not deleted');
+  const deletion = { world: 'api-world', checkpoint: 'checkpoint-one', fileId: 'checkpoint-file', digest: 'a'.repeat(64), size: 42 };
+  check((await request('checkpoint-delete', { ...deletion, digest: 'b'.repeat(64) })).status === 409, 'wrong deletion digest accepted');
+  check((await request('checkpoint-delete', deletion)).status === 200, 'delta deletion failed');
+  check((await request('checkpoint-delete', deletion)).status === 200, 'lost deletion response could not be retried');
+  const pendingTrash = (await (await request('checkpoint-trash-pending', { world: 'api-world' })).json()).checkpoints;
+  check(pendingTrash.some(item => item.checkpoint_id === deletion.checkpoint), 'deleted file not queued for cleanup');
+  check((await request('checkpoint-trash-done', deletion)).status === 200, 'cleanup receipt failed');
+  check((await request('checkpoint-trash-done', deletion)).status === 200, 'cleanup receipt retry failed');
+  const afterTrash = (await (await request('checkpoint-trash-pending', { world: 'api-world' })).json()).checkpoints;
+  check(!afterTrash.some(item => item.checkpoint_id === deletion.checkpoint), 'completed cleanup still pending');
+  check((await request('checkpoint-delete', { ...deletion, fileId: 'different' })).status === 409, 'deletion receipt reused for another file');
+  check((await db.prepare(commit).bind('api-world', 'deleted-object', 'api-owner', 'api-lease', grant.epoch, 0,
+    'a'.repeat(64), 'checkpoint-file', 42).all()).results.length === 0, 'deleted object became shared head');
+  check((await request('checkpoint', { ...checkpointBody, checkpoint: 'deleted-alias' })).status === 409, 'deleted object registered again');
+  check((await request('checkpoint-delete', { ...deletion, checkpoint: 'list-0', fileId: 'file-0' })).status === 409, 'full checkpoint deletion allowed');
+  check((await db.prepare('SELECT generation FROM worlds WHERE id=?1').bind('api-world').first()).generation === 0, 'checkpoint changed shared head');
+  objectVerified = false;
   check((await request('acquire', grantBody)).status === 409, 'grant retry created another grant');
   const recovered = await request('acquire-status', grantBody);
   check(recovered.status === 200 && (await recovered.json()).epoch === grant.epoch, 'lost grant response could not be reconciled');

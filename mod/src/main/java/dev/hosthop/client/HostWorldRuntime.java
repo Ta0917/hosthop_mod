@@ -69,12 +69,14 @@ public final class HostWorldRuntime {
     private final LeaseAuthorityClient authority;
     private final LeaseCoordinator coordinator;
     private final SharedWorldTransfer transfer;
+    private final SnapshotStore storage;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> daemon(r, "hosthop-world"));
     private final ExecutorService relayWorker = Executors.newSingleThreadExecutor(r -> daemon(r, "hosthop-relay"));
     private final ScheduledExecutorService renewer = Executors.newSingleThreadScheduledExecutor(r -> daemon(r, "hosthop-lease"));
     private final AtomicBoolean failed = new AtomicBoolean(), cancelled = new AtomicBoolean(), finishing = new AtomicBoolean();
     private final AtomicBoolean cleaned = new AtomicBoolean();
     private final AtomicBoolean lanStarted = new AtomicBoolean();
+    private final AtomicBoolean checkpointInFlight = new AtomicBoolean();
     private volatile LeaseCoordinator.Acquisition acquisition;
     private volatile IntegratedServer server;
     private volatile RelayPublisher relay;
@@ -88,7 +90,7 @@ public final class HostWorldRuntime {
     private HostWorldRuntime(Invitation invitation, DriveCredentialManager credentials, String initialName, Consumer<String> status,
                              SnapshotStore storage, LeaseAuthorityClient authority) {
         this.invitation = invitation; this.credentials = credentials; this.initialName = initialName; this.status = status;
-        this.authority = authority;
+        this.authority = authority; this.storage = storage;
         coordinator = new LeaseCoordinator(gate, authority, System::nanoTime, System::currentTimeMillis);
         transfer = new SharedWorldTransfer(gate, authority, storage, System::nanoTime, System::currentTimeMillis,
                 percent -> {
@@ -339,6 +341,123 @@ public final class HostWorldRuntime {
         server = integrated;
         ServerStopSignal.watch(candidate);
         renewer.schedule(() -> { if (!relayReady && !failed.get()) fail("screen.hosthop.host_failed"); }, 60, TimeUnit.SECONDS);
+        long interval = TimeUnit.MINUTES.toSeconds(5);
+        if (!net.neoforged.fml.loading.FMLEnvironment.isProduction() && Boolean.getBoolean("hosthop.checkpointTimerSmoke")) interval = 5;
+        renewer.scheduleWithFixedDelay(() -> queueCheckpoint(false), interval, interval, TimeUnit.SECONDS);
+    }
+
+    public static boolean requestManualCheckpoint() {
+        var runtime = ACTIVE.get();
+        return runtime != null && runtime.queueCheckpoint(true);
+    }
+    public static boolean checkpointActive() { var runtime = ACTIVE.get(); return runtime != null && runtime.checkpointInFlight.get(); }
+
+    private boolean queueCheckpoint(boolean manual) {
+        if (failed.get() || !relayReady || acquisition == null || !checkpointInFlight.compareAndSet(false, true)) return false;
+        try {
+            worker.execute(() -> {
+                try { if (createCheckpoint() && manual) tell("screen.hosthop.checkpoint_saved"); }
+                catch (Exception failure) {
+                    if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
+                    String detail = "Checkpoint copy failed".equals(failure.getMessage()) && failure.getCause() != null
+                            ? failure.getCause().getMessage() : failure.getClass().getSimpleName();
+                    com.mojang.logging.LogUtils.getLogger().warn("HostHop checkpoint failed ({})", detail);
+                    tell("screen.hosthop.checkpoint_failed");
+                } finally { checkpointInFlight.set(false); }
+            });
+        } catch (RuntimeException rejected) { checkpointInFlight.set(false); return false; }
+        return true;
+    }
+
+    private boolean createCheckpoint() throws Exception {
+        var current = server; var lease = acquisition;
+        if (current == null || lease == null || !current.isRunning() || !gate.mayContinueHosting(lease.attempt(), System.nanoTime(), System.currentTimeMillis())) return false;
+        boolean full = authority.fullCheckpointDue(invitation.world());
+        if (!net.neoforged.fml.loading.FMLEnvironment.isProduction() && Boolean.getBoolean("hosthop.forceFullCheckpointSmoke")) {
+            full = true;
+            System.clearProperty("hosthop.forceFullCheckpointSmoke");
+        }
+        Path dir = Files.createDirectory(sessionDir.resolve("checkpoint-" + UUID.randomUUID()));
+        var copied = new CompletableFuture<Path>();
+        current.execute(() -> {
+            try {
+                if (!current.isRunning() || !gate.mayContinueHosting(lease.attempt(), System.nanoTime(), System.currentTimeMillis())) throw new IOException("Host stopped");
+                if (!current.saveEverything(true, true, true) || monitor == null || monitor.hasFailure()) throw new IOException("World save failed");
+                Path copy = null;
+                for (int attempt = 0; attempt < 3; attempt++) {
+                    Path candidate = dir.resolve("world-" + attempt);
+                    try { dev.hosthop.snapshot.LiveWorldCopy.copy(worldPath, candidate); copy = candidate; break; }
+                    catch (dev.hosthop.snapshot.LiveWorldCopy.SourceChanged changed) {
+                        if (attempt == 2) throw changed;
+                    }
+                }
+                if (monitor.hasFailure()) throw new IOException("World save failed");
+                copied.complete(copy);
+            } catch (Throwable failure) { copied.completeExceptionally(failure); }
+        });
+        long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(10);
+        Path copy;
+        while (true) {
+            try { copy = copied.get(1, TimeUnit.SECONDS); break; }
+            catch (java.util.concurrent.TimeoutException waiting) {
+                if (!current.isRunning() || System.nanoTime() - deadline >= 0) throw new IOException("Checkpoint copy stopped");
+            }
+            catch (java.util.concurrent.ExecutionException failure) {
+                throw new IOException("Checkpoint copy failed", failure.getCause());
+            }
+        }
+        if (!gate.mayContinueHosting(lease.attempt(), System.nanoTime(), System.currentTimeMillis())) return false;
+        String token = credentials.access().accessToken();
+        var result = transfer.publishCheckpoint(lease, copy, dir, invitation.folder(), token, full);
+        com.mojang.logging.LogUtils.getLogger().info("HostHop checkpoint saved ({})", result.kind());
+        if ("full".equals(result.kind())) {
+            Path retained = sessionDir.resolve("checkpoint-base-" + result.id() + ".zip");
+            Files.move(dir.resolve("checkpoint.zip"), retained);
+            Path previous = transfer.adoptCheckpointBase(result, retained);
+            if (previous != null && previous.getParent().equals(sessionDir)
+                    && previous.getFileName().toString().matches("checkpoint-base-[0-9a-f-]{36}\\.zip"))
+                Files.deleteIfExists(previous);
+        }
+        try { removeCompletedCheckpoint(dir); }
+        catch (IOException cleanupFailure) { com.mojang.logging.LogUtils.getLogger().warn("HostHop could not remove completed checkpoint workspace"); }
+        if (storage instanceof GoogleDriveSnapshotStore drive) {
+            try {
+                for (var old : authority.checkpointTrashPending(invitation.world())) {
+                    if (!gate.mayContinueHosting(lease.attempt(), System.nanoTime(), System.currentTimeMillis())) break;
+                    drive.trash(old.object(), invitation.folder(), token);
+                    authority.checkpointTrashDone(invitation.world(), old);
+                }
+                int keep = authority.checkpointRetention(invitation.world());
+                for (var old : authority.checkpointPruneCandidates(invitation.world())) {
+                    if (!gate.mayContinueHosting(lease.attempt(), System.nanoTime(), System.currentTimeMillis())) break;
+                    if (!drive.canUseBase(old.object(), invitation.folder(), token)) continue;
+                    try { authority.pruneCheckpoint(invitation.world(), old, keep); }
+                    catch (IOException first) { authority.pruneCheckpoint(invitation.world(), old, keep); }
+                    drive.trash(old.object(), invitation.folder(), token);
+                    authority.checkpointTrashDone(invitation.world(), old);
+                }
+            } catch (IOException cleanupFailure) {
+                com.mojang.logging.LogUtils.getLogger().warn("HostHop could not complete backup retention cleanup");
+                tell("screen.hosthop.checkpoint_cleanup_failed");
+            }
+        }
+        return true;
+    }
+
+    private void removeCompletedCheckpoint(Path directory) throws IOException {
+        Path expectedParent = sessionDir.toRealPath();
+        Path actual = directory.toRealPath();
+        if (Files.isSymbolicLink(directory) || !actual.getParent().equals(expectedParent)
+                || !actual.getFileName().toString().matches("checkpoint-[0-9a-f-]{36}")) throw new IOException("Invalid checkpoint workspace");
+        Files.walkFileTree(actual, new java.nio.file.SimpleFileVisitor<>() {
+            @Override public java.nio.file.FileVisitResult visitFile(Path file, java.nio.file.attribute.BasicFileAttributes attrs) throws IOException {
+                Files.delete(file); return java.nio.file.FileVisitResult.CONTINUE;
+            }
+            @Override public java.nio.file.FileVisitResult postVisitDirectory(Path path, IOException error) throws IOException {
+                if (error != null) throw error;
+                Files.delete(path); return java.nio.file.FileVisitResult.CONTINUE;
+            }
+        });
     }
 
     private void publishLan() {

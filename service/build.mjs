@@ -10,7 +10,11 @@ const mappings = { acquire: 'acquire.sql', renew: 'renew.sql', acquireStatus: 'a
   endpointUpdate: 'endpoint_update.sql', endpointStatus: 'endpoint_status.sql', endpointRevision: 'endpoint_revision.sql',
   commit: 'commit.sql', commitStatus: 'commit_status.sql', snapshotStatus: 'snapshot_status.sql', release: 'release.sql', releaseStatus: 'release_status.sql',
   abort: 'abort.sql', abortStatus: 'abort_status.sql', hostStatus: 'host_status.sql',
-  cancelAcquisition: 'cancel_acquisition.sql', cancelAcquisitionStatus: 'cancel_acquisition_status.sql', history: 'history.sql', recoverStopped: 'recover_stopped.sql' };
+  cancelAcquisition: 'cancel_acquisition.sql', cancelAcquisitionStatus: 'cancel_acquisition_status.sql', history: 'history.sql', recoverStopped: 'recover_stopped.sql',
+  checkpoint: 'checkpoint.sql', checkpointStatus: 'checkpoint_status.sql', checkpointHistory: 'checkpoint_history.sql', checkpointFull: 'checkpoint_full.sql',
+  checkpointDelete: 'checkpoint_delete.sql', checkpointDeleteStatus: 'checkpoint_delete_status.sql',
+  checkpointRetention: 'checkpoint_retention.sql', checkpointRetentionSet: 'checkpoint_retention_set.sql', checkpointPrune: 'checkpoint_prune.sql',
+  checkpointPruneDelete: 'checkpoint_prune_delete.sql', checkpointTrashPending: 'checkpoint_trash_pending.sql', checkpointTrashDone: 'checkpoint_trash_done.sql' };
 const sql = Object.fromEntries(await Promise.all(Object.entries(mappings).map(async ([key, file]) => [key, await readFile(join(source, file), 'utf8')])));
 await mkdir(out, { recursive: true });
 await writeFile(join(out, 'sql.mjs'), `export default ${JSON.stringify(sql)};\n`);

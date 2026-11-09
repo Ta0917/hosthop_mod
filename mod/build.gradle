@@ -95,6 +95,12 @@ neoForge {
                     systemProperty 'hosthop.uncleanRecoverySmoke', 'true'
                     systemProperty 'hosthop.fakeRelaySmoke', 'true'
                 }
+                if (project.hasProperty('hosthopCheckpointSmoke')) {
+                    systemProperty 'hosthop.checkpointSmoke', 'true'
+                    systemProperty 'hosthop.fakeRelaySmoke', 'true'
+                }
+                if (project.hasProperty('hosthopCheckpointTimerSmoke')) systemProperty 'hosthop.checkpointTimerSmoke', 'true'
+                if (project.hasProperty('hosthopForceFullCheckpointSmoke')) systemProperty 'hosthop.forceFullCheckpointSmoke', 'true'
                 if (project.hasProperty('hosthopRealSmoke')) {
                     systemProperty 'hosthop.realSmoke', 'true'
                     systemProperty 'hosthop.realInvite', project.hasProperty('hosthopRealInvitation')
@@ -370,6 +376,11 @@ tasks.register('backupRestoreCheck', JavaExec) {
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.world.BackupRestoreTest'
 }
+tasks.register('liveWorldCopyCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.snapshot.LiveWorldCopyTest'
+}
 tasks.register('backupRestoreLiveCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath
@@ -514,7 +525,7 @@ tasks.register('prepareClientCredentials', JavaExec) {
         args project.property('clientInvitation'), project.property('clientDriveCredentials'), project.property('clientCredentialsOutput')
     }
 }
-tasks.named('check') { dependsOn tasks.named('backupRestoreCheck'), tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck'), tasks.named('invitationSafetyCheck'), tasks.named('pendingHostRecoveryCheck'), tasks.named('hostPlayerIdentityCheck'), tasks.named('localSnapshotCacheCheck'), tasks.named('binaryDeltaCheck'), tasks.named('saveKeepAliveCheck'), tasks.named('localRecoveryExportCheck'), tasks.named('saveStatusCheck') }
+tasks.named('check') { dependsOn tasks.named('liveWorldCopyCheck'), tasks.named('backupRestoreCheck'), tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck'), tasks.named('invitationSafetyCheck'), tasks.named('pendingHostRecoveryCheck'), tasks.named('hostPlayerIdentityCheck'), tasks.named('localSnapshotCacheCheck'), tasks.named('binaryDeltaCheck'), tasks.named('saveKeepAliveCheck'), tasks.named('localRecoveryExportCheck'), tasks.named('saveStatusCheck') }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {

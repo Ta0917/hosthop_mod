@@ -6,6 +6,7 @@ SELECT id, ?2, owner, lease_id, epoch, generation, ?7, ?8, ?9
 FROM worlds
 WHERE id = ?1 AND owner = ?3 AND lease_id = ?4 AND epoch = ?5
   AND generation = ?6 AND expires <= unixepoch('now')
+  AND NOT EXISTS (SELECT 1 FROM checkpoint_deletions d WHERE d.world_id = ?1 AND d.object_id = ?8)
   AND typeof(?2) = 'text' AND length(?2) > 0
   AND typeof(?7) = 'text' AND length(?7) > 0
   AND typeof(?8) = 'text' AND length(?8) > 0

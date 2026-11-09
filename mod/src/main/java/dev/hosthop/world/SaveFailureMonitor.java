@@ -19,6 +19,8 @@ public final class SaveFailureMonitor implements AutoCloseable {
         context = (LoggerContext) LogManager.getContext(false);
         appender = new AbstractAppender("HostHopSaveMonitor-" + java.util.UUID.randomUUID(), null, null, false, Property.EMPTY_ARRAY) {
             @Override public void append(LogEvent event) {
+                // Our own backup/network warnings do not mean Minecraft's save failed.
+                if (event.getLoggerName() != null && event.getLoggerName().startsWith("dev.hosthop.")) return;
                 if (event.getLevel().isMoreSpecificThan(Level.ERROR)) { failed.set(true); return; }
                 if (event.getLevel().isMoreSpecificThan(Level.WARN)) {
                     String message = event.getMessage().getFormattedMessage().toLowerCase(Locale.ROOT);

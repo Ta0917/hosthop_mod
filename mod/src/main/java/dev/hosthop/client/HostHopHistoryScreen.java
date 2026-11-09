@@ -30,11 +30,17 @@ public final class HostHopHistoryScreen extends Screen {
     @Override protected void init() {
         addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
                 .bounds(width / 2 - 100, height / 2 + 70, 200, 20).build());
+        addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.checkpoint_history"),
+                button -> Minecraft.getInstance().gui.setScreen(new HostHopCheckpointScreen(this)))
+                .bounds(width / 2 + 25, height / 2 - 112, 95, 20).build());
         for (int i = 0; i < snapshots.size(); i++) {
             var snapshot = snapshots.get(i);
             long mib = (snapshot.object().size() + 1_048_575) / 1_048_576;
             addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.history_entry", snapshot.generation(), mib), button -> restore(snapshot))
-                    .bounds(width / 2 - 100, height / 2 - 39 + i * 24, 200, 20).build());
+                    .bounds(width / 2 - 100, height / 2 - 39 + i * 24, 143, 20).build());
+            addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.history_restore_shared"),
+                    button -> BackupActions.restoreShared(this, snapshot, null, value -> status = value))
+                    .bounds(width / 2 + 47, height / 2 - 39 + i * 24, 53, 20).build());
         }
         if (requested) return;
         requested = true;
@@ -67,7 +73,9 @@ public final class HostHopHistoryScreen extends Screen {
                     var vault = new WindowsSecretStore(FMLPaths.CONFIGDIR.get().resolve("hosthop").resolve("credentials.dat"));
                     var invite = Invitation.fromSecrets(vault.load());
                     var credentials = new DriveCredentialManager(vault, new GoogleDriveAuthorization(invite.oauthClientId(), invite.oauthClientSecret()));
-                    String name = BackupRestore.restore(snapshot, new GoogleDriveSnapshotStore(), credentials.access().accessToken(), minecraft.gameDirectory.toPath());
+                    var drive = new GoogleDriveSnapshotStore();
+                    String name = BackupRestore.restore(snapshot, drive, credentials.access().accessToken(), minecraft.gameDirectory.toPath(),
+                            BackupActions.accessGrant(credentials, drive, invite.folder(), this, message -> status = message));
                     minecraft.execute(() -> { if (minecraft.gui.screen() == this) status = Component.translatable("screen.hosthop.history_restored", name); });
                 } catch (Exception failure) {
                     minecraft.execute(() -> { if (minecraft.gui.screen() == this) status = Component.translatable("screen.hosthop.history_restore_failed"); });

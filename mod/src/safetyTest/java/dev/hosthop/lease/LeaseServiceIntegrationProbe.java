@@ -282,6 +282,36 @@ public final class LeaseServiceIntegrationProbe {
             check(client.commitStatus(recoveryReceipt).equals(recoveryReceipt) && client.releaseStatus(recoveryReceipt).matches(recoveryReceipt));
             try (var files = Files.list(recoverySession)) { for (var file : files.toList()) Files.delete(file); }
             Files.delete(recoverySession);
+            var restoreGame = Files.createDirectory(directory.resolve("restore-game"));
+            Files.createDirectory(restoreGame.resolve("saves"));
+            var restoreConfig = Files.createDirectories(restoreGame.resolve("config/hosthop"));
+            var restoreInvite = dev.hosthop.config.Invitation.fromSecrets(java.util.Map.of("authority", base.toString(), "world", "world", "principal", "owner",
+                    "member_token", "a".repeat(43), "oauth_client_id", "client", "oauth_client_secret", "secret", "drive_folder", "folder"));
+            var beforeRestore = client.snapshot("world");
+            var busyGate = new LocalHostGate();
+            var busyCoordinator = new LeaseCoordinator(busyGate, client, System::nanoTime, System::currentTimeMillis);
+            var busyLease = busyCoordinator.begin("world", "busy-restore-host", "owner", 30, 2);
+            check(busyCoordinator.acquire(busyLease));
+            var checkpointRecord = new CheckpointRecord("world", "restore-checkpoint", "owner", busyLease.lease(), busyLease.epoch(),
+                    busyLease.generation(), beforeRestore.object(), "full", 0);
+            client.checkpoint(checkpointRecord, "drive-test-token");
+            var checkpointToRestore = client.checkpointHistory("world").get(0);
+            try {
+                dev.hosthop.world.SharedBackupRestore.restore(restoreInvite, client, storage, "drive-test-token", restoreGame, restoreConfig, beforeRestore, null);
+                throw new AssertionError("restore accepted while host active");
+            } catch (java.io.IOException expected) { }
+            check(!Files.exists(restoreConfig.resolve("pending-host.dat")) && client.snapshot("world").generation() == beforeRestore.generation());
+            check(busyCoordinator.abortBeforeHosting(busyLease));
+            dev.hosthop.world.SharedBackupRestore.restore(restoreInvite, client, storage, "drive-test-token", restoreGame, restoreConfig, beforeRestore, null);
+            check(client.snapshot("world").generation() == beforeRestore.generation() + 1);
+            check(!Files.exists(restoreConfig.resolve("pending-host.dat")));
+            dev.hosthop.world.SharedBackupRestore.restore(restoreInvite, client, storage, "drive-test-token", restoreGame, restoreConfig, null, checkpointToRestore);
+            check(client.snapshot("world").generation() == beforeRestore.generation() + 2);
+            check(!Files.exists(restoreConfig.resolve("pending-host.dat")));
+            Files.walkFileTree(restoreGame, new java.nio.file.SimpleFileVisitor<>() {
+                @Override public java.nio.file.FileVisitResult visitFile(Path file, java.nio.file.attribute.BasicFileAttributes attrs) throws java.io.IOException { Files.delete(file); return java.nio.file.FileVisitResult.CONTINUE; }
+                @Override public java.nio.file.FileVisitResult postVisitDirectory(Path dir, java.io.IOException error) throws java.io.IOException { if (error != null) throw error; Files.delete(dir); return java.nio.file.FileVisitResult.CONTINUE; }
+            });
             System.out.println("PASS: Java HTTPS client to local workerd and D1");
         } finally {
             if (relayExecutor != null) relayExecutor.shutdownNow();
@@ -309,6 +339,8 @@ public final class LeaseServiceIntegrationProbe {
             Files.deleteIfExists(directory.resolve("remote-3.zip"));
             Files.deleteIfExists(directory.resolve("remote-4.zip"));
             Files.deleteIfExists(directory.resolve("remote-5.zip"));
+            Files.deleteIfExists(directory.resolve("remote-6.zip"));
+            Files.deleteIfExists(directory.resolve("remote-7.zip"));
             Files.deleteIfExists(directory.resolve("interrupted.zip"));
             Files.deleteIfExists(directory.resolve("retry.zip"));
             Files.deleteIfExists(directory.resolve("retry-journal"));

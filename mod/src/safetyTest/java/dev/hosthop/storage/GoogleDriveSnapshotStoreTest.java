@@ -77,6 +77,15 @@ public final class GoogleDriveSnapshotStoreTest {
             var baseMetadata = new GoogleDriveSnapshotStore(request -> reply(200, Map.of(), "{\"id\":\"file-id\",\"name\":\"" + hash
                     + ".zip\",\"size\":\"" + size + "\",\"sha256Checksum\":\"" + hash + "\",\"parents\":[\"folder\"],\"trashed\":false}"));
             check(baseMetadata.canUseBase(uploaded, "folder", "test-token"));
+            var trashCalls = new AtomicInteger();
+            var trash = new GoogleDriveSnapshotStore(request -> {
+                trashCalls.incrementAndGet();
+                if (request.method().equals("GET")) return reply(200, Map.of(), metadata);
+                check(request.method().equals("PATCH") && request.uri().getHost().equals("www.googleapis.com"));
+                return reply(200, Map.of(), "{\"id\":\"file-id\",\"trashed\":true}");
+            });
+            trash.trash(uploaded, "folder", "test-token");
+            check(trashCalls.get() == 2);
             try { baseMetadata.canUseBase(uploaded, "wrong-folder", "test-token"); throw new AssertionError("wrong base folder accepted"); }
             catch (IOException expected) { }
             var inspection = new GoogleDriveSnapshotStore(request -> {

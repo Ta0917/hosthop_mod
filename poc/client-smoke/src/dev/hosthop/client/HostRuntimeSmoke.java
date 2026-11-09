@@ -46,6 +46,7 @@ public final class HostRuntimeSmoke {
     private static int stage;
     private static final Object FAKE_RELAY = new Object();
     private static boolean fakeRelayStarted;
+    private static boolean firstCheckpoint, secondCheckpoint;
 
     @SubscribeEvent public static void serverStopped(ServerStoppedEvent event) {
         if (fakeRelayStarted) { E4mcRelayBridge.end(FAKE_RELAY); fakeRelayStarted = false; }
@@ -91,6 +92,12 @@ public final class HostRuntimeSmoke {
                 stage = 3;
             } else if (stage == 3 && block.isDone()) {
                 if (!block.join()) throw new IllegalStateException("closed-host world change was not restored");
+                if (Boolean.getBoolean("hosthop.checkpointSmoke") && !firstCheckpoint) {
+                    firstCheckpoint = true;
+                    if (!Boolean.getBoolean("hosthop.checkpointTimerSmoke") && !HostWorldRuntime.requestManualCheckpoint())
+                        throw new IllegalStateException("checkpoint did not start");
+                    stage = 8; return;
+                }
                 if (Boolean.getBoolean("hosthop.closeHostSmoke")) { stage = 99; minecraft.stop(); return; }
                 minecraft.disconnect(new TitleScreen(), false);
                 stage = 4;
@@ -140,6 +147,11 @@ public final class HostRuntimeSmoke {
                 stage = 6;
             } else if (stage == 6 && block.isDone()) {
                 if (!block.join()) throw new IllegalStateException("world change was not restored");
+                if (Boolean.getBoolean("hosthop.checkpointSmoke") && !secondCheckpoint) {
+                    secondCheckpoint = true;
+                    if (!HostWorldRuntime.requestManualCheckpoint()) throw new IllegalStateException("second checkpoint did not start");
+                    stage = 9; return;
+                }
                 minecraft.disconnect(new TitleScreen(), false);
                 stage = 7;
             } else if (stage == 7 && !HostWorldRuntime.active()) {
@@ -150,12 +162,30 @@ public final class HostRuntimeSmoke {
                     Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-expired-recovery-result.txt"), "verified");
                 if (Boolean.getBoolean("hosthop.uncleanRecoverySmoke"))
                     Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-unclean-recovery-result.txt"), "verified");
+                if (Boolean.getBoolean("hosthop.checkpointSmoke"))
+                    Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-checkpoint-result.txt"), "verified");
                 System.out.println("HOSTHOP_HOST_SMOKE two integrated hosts restored world change=true");
                 finish(minecraft);
+            } else if ((stage == 8 || stage == 9) && !HostWorldRuntime.checkpointActive()) {
+                var checkpoints = context.authority().checkpointHistory(context.invitation().world());
+                if (stage == 8 && Boolean.getBoolean("hosthop.checkpointTimerSmoke") && checkpoints.isEmpty()) return;
+                if (checkpoints.size() < (stage == 8 ? 1 : 2)) throw new IllegalStateException("checkpoint was not recorded");
+                if (stage == 8 && !checkpoints.get(0).kind().equals("full")) throw new IllegalStateException("first checkpoint not full");
+                if (stage == 9) {
+                    if (!checkpoints.get(0).kind().equals("delta")) throw new IllegalStateException("second checkpoint not a delta");
+                    String access = context.credentials().access().accessToken();
+                    String name = dev.hosthop.world.BackupRestore.restore(checkpoints.get(0), context.storage(), access, minecraft.gameDirectory.toPath());
+                    if (!Files.isRegularFile(minecraft.gameDirectory.toPath().resolve("saves").resolve(name).resolve("level.dat"))) throw new IllegalStateException("checkpoint restore failed");
+                }
+                stage = stage == 8 ? 3 : 6;
             } else if ((stage == 2 || stage == 5) && !HostWorldRuntime.active()) {
                 throw new IllegalStateException("host startup failed: " + HostWorldRuntime.lastStatus());
             }
         } catch (Throwable failure) {
+            if (Boolean.getBoolean("hosthop.checkpointSmoke")) {
+                try { Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-checkpoint-failure.txt"), failure.toString()); }
+                catch (Exception ignored) { }
+            }
             if (Boolean.getBoolean("hosthop.uncleanRecoverySmoke")) {
                 try { Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-unclean-recovery-failure.txt"), failure.toString()); }
                 catch (Exception ignored) { }
@@ -228,6 +258,7 @@ public final class HostRuntimeSmoke {
             SnapshotStore storage = new SnapshotStore() {
                 private int count;
                 private final java.util.Map<String, Path> objects = new java.util.HashMap<>();
+                @Override public boolean canUseBase(GoogleDriveSnapshotStore.ObjectRef base, String folder, String token) { return objects.containsKey(base.fileId()); }
                 @Override public GoogleDriveSnapshotStore.ObjectRef upload(Path archive, String folder, String accessToken) throws java.io.IOException, InterruptedException {
                     if (Boolean.getBoolean("hosthop.closeHostSmoke")) Thread.sleep(17_000);
                     if ((Boolean.getBoolean("hosthop.interruptedSmoke") || Boolean.getBoolean("hosthop.expiredRecoverySmoke") || Boolean.getBoolean("hosthop.uncleanRecoverySmoke")) && count == 0) {
@@ -256,6 +287,9 @@ public final class HostRuntimeSmoke {
                 }
                 @Override public SnapshotVerifier.Result download(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String accessToken) throws java.io.IOException {
                     Files.copy(objects.get(object.fileId()), destination); return SnapshotVerifier.verify(destination);
+                }
+                @Override public void downloadRaw(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String accessToken) throws java.io.IOException {
+                    Files.copy(objects.get(object.fileId()), destination);
                 }
             };
             return new Context(bridge, invitation, credentials, storage, TestAuthority.create(base, "a".repeat(43), tls));

@@ -28,6 +28,7 @@ try {
   const db = await mf.getD1Database('DB');
   await db.batch(schema.map(statement => db.prepare(statement)));
   await db.batch(migration.map(statement => db.prepare(statement)));
+  await db.batch(load('checkpoint_migration.sql').split(/(?=CREATE (?:TABLE|TRIGGER|UNIQUE INDEX) )/).map(s => s.trim()).filter(Boolean).map(statement => db.prepare(statement)));
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('test-world').run();
   const call = (route, body, credential = token) => mf.dispatchFetch(`http://localhost/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),

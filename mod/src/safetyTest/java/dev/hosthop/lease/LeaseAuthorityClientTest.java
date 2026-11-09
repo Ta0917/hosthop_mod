@@ -13,7 +13,7 @@ public final class LeaseAuthorityClientTest {
                 "{\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         var client = new LeaseAuthorityClient(URI.create("https://authority.example/"), "a".repeat(43),
                 request -> {
-                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status", "/endpoint-revision", "/endpoint-update", "/commit", "/commit-status", "/recover-stopped", "/snapshot-status", "/release", "/release-status", "/abort", "/host-status", "/history").contains(request.uri().getPath()));
+                    check(java.util.Set.of("/acquire", "/renew", "/acquire-status", "/endpoint-status", "/endpoint-revision", "/endpoint-update", "/commit", "/commit-status", "/recover-stopped", "/snapshot-status", "/release", "/release-status", "/abort", "/host-status", "/history", "/checkpoint", "/checkpoint-history", "/checkpoint-full", "/checkpoint-delete", "/checkpoint-retention", "/checkpoint-retention-set", "/checkpoint-prune", "/checkpoint-prune-delete").contains(request.uri().getPath()));
                     check(request.headers().firstValue("Authorization").orElseThrow().equals("Bearer " + "a".repeat(43)));
                     return reply.get();
                 }, nanos::get, millis::get);
@@ -52,6 +52,24 @@ public final class LeaseAuthorityClientTest {
         check(client.commit(publication, "drive-token").equals(publication));
         check(client.recoverStopped(publication, "drive-token").equals(publication));
         check(client.commitStatus(publication).equals(publication));
+        var checkpoint = new CheckpointRecord("world", "checkpoint", "owner", "lease", 4, 3,
+                new dev.hosthop.storage.GoogleDriveSnapshotStore.ObjectRef("file-id", digest, 42), "delta", 0);
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"world_id\":\"world\",\"checkpoint_id\":\"checkpoint\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"generation\":3,\"digest\":\"" + digest + "\",\"object_id\":\"file-id\",\"object_size\":42,\"kind\":\"delta\",\"created_at\":100}"));
+        check(client.checkpoint(checkpoint, "drive-token").createdAt() == 100);
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"created_at\":100,\"server_now\":86500}"));
+        check(client.fullCheckpointDue("world"));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"created_at\":100,\"server_now\":86499}"));
+        check(!client.fullCheckpointDue("world"));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"checkpoints\":[{\"checkpoint_id\":\"checkpoint\",\"generation\":3,\"digest\":\"" + digest + "\",\"object_id\":\"file-id\",\"object_size\":42,\"kind\":\"delta\",\"created_at\":100}]}"));
+        check(client.checkpointHistory("world").size() == 1 && client.checkpointHistory("world").get(0).id().equals("checkpoint"));
+        var listed = client.checkpointHistory("world").get(0);
+        check(client.checkpointPruneCandidates("world").size() == 1);
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"keep_delta\":4}"));
+        check(client.checkpointRetention("world") == 4);
+        client.setCheckpointRetention("world", 4);
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"world_id\":\"world\",\"checkpoint_id\":\"checkpoint\",\"object_id\":\"file-id\",\"object_size\":42,\"digest\":\"" + digest + "\"}"));
+        client.deleteCheckpoint("world", listed);
+        client.pruneCheckpoint("world", listed, 4);
         reply.set(new LeaseAuthorityClient.Reply(200, receipt.replace("file-id", "wrong-file")));
         expectFailure(() -> client.commitStatus(publication));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"generation\":4,\"digest\":\"" + digest + "\",\"object_id\":\"file-id\",\"object_size\":42}"));
