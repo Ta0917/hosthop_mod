@@ -8,6 +8,9 @@ import java.util.function.Consumer;
 
 /** Explicit consent and DPAPI-backed refresh credentials; call off the game thread. */
 public final class DriveCredentialManager {
+    public static final class AccountMismatch extends IOException {
+        private AccountMismatch() { super("Different Google account selected"); }
+    }
     private static final String REFRESH = "drive_refresh_token";
     private static final String FOLDER = "drive_folder_id";
     private final WindowsSecretStore vault;
@@ -55,18 +58,23 @@ public final class DriveCredentialManager {
             throw new IllegalArgumentException("Invalid file authorization");
         if (!authorizing.compareAndSet(false, true)) throw new IOException("Drive authorization already in progress");
         long generation = authorizationGeneration.get();
-        try (var session = authorization.begin(expectedFile)) {
+        try {
+            String originalAccount = authorization.accountId(access().accessToken());
+            try (var session = authorization.begin(expectedFile)) {
             activeSession = session;
             if (generation != authorizationGeneration.get()) throw new IOException("Drive authorization cancelled");
             openBrowser.accept(session.authorizationUri());
             var selected = session.await(Duration.ofMinutes(5));
             if (generation != authorizationGeneration.get()) throw new IOException("Drive authorization cancelled");
+            if (!originalAccount.equals(authorization.accountId(selected.accessToken()))) throw new AccountMismatch();
             var secrets = vault.load();
             if (!expectedFolder.equals(secrets.get(FOLDER))) throw new IOException("Drive folder does not match invitation");
             String refresh = selected.refreshToken() != null ? selected.refreshToken() : secrets.get(REFRESH);
             if (refresh == null) throw new IOException("Google did not provide a refresh token");
             var tokens = authorization.refresh(refresh, expectedFolder);
+            if (!originalAccount.equals(authorization.accountId(tokens.accessToken()))) throw new AccountMismatch();
             synchronized (this) { save(tokens); cache(tokens); }
+            }
         } finally {
             activeSession = null;
             authorizing.set(false);

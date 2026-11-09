@@ -5,6 +5,8 @@ import dev.hosthop.lease.LeaseAuthorityClient;
 import dev.hosthop.storage.WindowsSecretStore;
 import dev.hosthop.storage.GoogleDriveAuthorization;
 import dev.hosthop.storage.DriveCredentialManager;
+import dev.hosthop.storage.GoogleDriveSnapshotStore;
+import dev.hosthop.snapshot.BinaryDelta;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -80,8 +82,27 @@ public final class HostHopScreen extends Screen {
                     if (id == request.get() && Minecraft.getInstance().gui.screen() == this) Util.getPlatform().openUri(uri);
                     else manager.cancelAuthorization();
                 }));
+                var store = new GoogleDriveSnapshotStore();
+                var token = manager.access().accessToken();
+                if (store.isDelta(snapshot.object(), token)) {
+                    Path sessions = Minecraft.getInstance().gameDirectory.toPath().resolve("hosthop").resolve("sessions");
+                    Files.createDirectories(sessions);
+                    Path cached = Files.createTempDirectory(sessions, "authorization-").resolve("remote-object.bin");
+                    store.downloadRaw(snapshot.object(), cached, token);
+                    var base = BinaryDelta.inspect(cached).base();
+                    if (!store.canRead(base, token)) {
+                        Minecraft.getInstance().execute(() -> {
+                            if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(true, "screen.hosthop.authorizing_base");
+                        });
+                        manager.authorizeFile(base.fileId(), invitation.folder(), uri -> Minecraft.getInstance().execute(() -> {
+                            if (id == request.get() && Minecraft.getInstance().gui.screen() == this) Util.getPlatform().openUri(uri);
+                            else manager.cancelAuthorization();
+                        }));
+                    }
+                }
                 finish(id, "screen.hosthop.snapshot_authorized");
-            } catch (Exception failure) { finish(id, "screen.hosthop.snapshot_authorize_failed"); }
+            } catch (DriveCredentialManager.AccountMismatch failure) { finish(id, "screen.hosthop.account_mismatch"); }
+            catch (Exception failure) { finish(id, "screen.hosthop.snapshot_authorize_failed"); }
             finally { activeAuthorization = null; }
         });
     }

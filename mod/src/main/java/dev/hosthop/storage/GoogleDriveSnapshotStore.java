@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.hosthop.snapshot.SnapshotVerifier;
 import dev.hosthop.snapshot.DiskSpace;
+import dev.hosthop.snapshot.BinaryDelta;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -95,7 +96,8 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
                 || accessToken.isBlank() || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
             throw new IllegalArgumentException("Invalid Drive credentials or folder");
         if (!Files.isRegularFile(archive, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Invalid archive");
-        SnapshotVerifier.verify(archive);
+        if (BinaryDelta.isDelta(archive)) BinaryDelta.inspect(archive);
+        else SnapshotVerifier.verify(archive);
         long size = Files.size(archive);
         if (size <= 0 || size > MAX_SIZE) throw new IOException("Invalid snapshot size");
         checkUploadCapacity(size, accessToken);
@@ -148,6 +150,11 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
 
     /** Downloads to a new file, validates its SHA-256 and verifies the complete archive. */
     public SnapshotVerifier.Result download(ObjectRef object, Path destination, String accessToken) throws IOException, InterruptedException {
+        downloadRaw(object, destination, accessToken);
+        return SnapshotVerifier.verify(destination);
+    }
+
+    @Override public void downloadRaw(ObjectRef object, Path destination, String accessToken) throws IOException, InterruptedException {
         if (object == null || object.fileId() == null || !object.fileId().matches("[A-Za-z0-9_-]{1,200}")
                 || object.sha256() == null || !object.sha256().matches("[0-9a-f]{64}") || object.size() <= 0 || object.size() > MAX_SIZE
                 || accessToken == null || accessToken.isBlank() || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
@@ -163,7 +170,50 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         }
         if (Files.size(destination) != object.size() || !hashFile(destination).equals(object.sha256()))
             throw new IOException("Downloaded snapshot mismatch");
-        return SnapshotVerifier.verify(destination);
+    }
+
+    /** Whether an already-authorized account can read the exact Drive object. */
+    public boolean canRead(ObjectRef object, String accessToken) throws IOException, InterruptedException {
+        if (object == null || object.fileId() == null || !object.fileId().matches("[A-Za-z0-9_-]{1,200}")
+                || accessToken == null || accessToken.isBlank() || accessToken.length() > 4096
+                || accessToken.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException("Invalid Drive lookup");
+        var request = HttpRequest.newBuilder(URI.create("https://www.googleapis.com/drive/v3/files/" + object.fileId() + "?fields=id"))
+                .timeout(Duration.ofSeconds(15)).header("Authorization", "Bearer " + accessToken).GET().build();
+        Reply reply = transport.send(request);
+        if (reply.status() == 403 || reply.status() == 404) return false;
+        if (reply.status() != 200) throw new IOException("Drive access check failed");
+        try {
+            return object.fileId().equals(JsonParser.parseString(new String(reply.body(), StandardCharsets.UTF_8)).getAsJsonObject().get("id").getAsString());
+        } catch (RuntimeException invalid) { throw new IOException("Invalid Drive access response", invalid); }
+    }
+
+    @Override public boolean canUseBase(ObjectRef object, String folder, String accessToken) throws IOException, InterruptedException {
+        if (object == null || object.fileId() == null || !object.fileId().matches("[A-Za-z0-9_-]{1,200}")
+                || object.sha256() == null || !object.sha256().matches("[0-9a-f]{64}") || object.size() < 1 || object.size() > MAX_SIZE
+                || folder == null || !folder.matches("[A-Za-z0-9_-]{1,200}") || accessToken == null || accessToken.isBlank()
+                || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
+            throw new IllegalArgumentException("Invalid base lookup");
+        var request = HttpRequest.newBuilder(URI.create("https://www.googleapis.com/drive/v3/files/" + object.fileId()
+                + "?fields=id,name,size,sha256Checksum,parents,trashed"))
+                .timeout(Duration.ofSeconds(15)).header("Authorization", "Bearer " + accessToken).GET().build();
+        Reply reply = transport.send(request);
+        if (reply.status() == 403 || reply.status() == 404) return false;
+        if (reply.status() != 200) throw new IOException("Drive base check failed");
+        validateMetadata(reply, folder, object.sha256() + ".zip", object.sha256(), object.size());
+        return true;
+    }
+
+    /** Inspect a small prefix without downloading an entire full snapshot. */
+    public boolean isDelta(ObjectRef object, String accessToken) throws IOException, InterruptedException {
+        if (object == null || object.fileId() == null || !object.fileId().matches("[A-Za-z0-9_-]{1,200}")
+                || accessToken == null || accessToken.isBlank() || accessToken.length() > 4096
+                || accessToken.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException("Invalid Drive lookup");
+        var request = HttpRequest.newBuilder(URI.create("https://www.googleapis.com/drive/v3/files/" + object.fileId() + "?alt=media"))
+                .timeout(Duration.ofSeconds(30)).header("Authorization", "Bearer " + accessToken).header("Range", "bytes=0-7").GET().build();
+        var response = transport.send(request);
+        if ((response.status() != 200 && response.status() != 206) || response.body().length < 8)
+            throw new IOException("Drive snapshot inspection failed");
+        return BinaryDelta.hasMagic(java.util.Arrays.copyOf(response.body(), 8));
     }
 
     private static ObjectRef validateMetadata(Reply response, String folder, String name, String hash, long size) throws IOException {

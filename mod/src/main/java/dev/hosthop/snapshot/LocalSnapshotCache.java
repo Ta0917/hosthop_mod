@@ -25,7 +25,7 @@ public final class LocalSnapshotCache {
         try (var children = Files.newDirectoryStream(sessions)) {
             for (Path session : children) {
                 if (!Files.isDirectory(session, LinkOption.NOFOLLOW_LINKS)) continue;
-                for (String name : new String[]{"final.zip", "initial.zip"}) {
+                for (String name : new String[]{"final.zip", "initial.zip", "base.zip", "delta.bin", "remote-object.bin"}) {
                     Path source = session.resolve(name);
                     if (!Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS) || Files.size(source) != expected.size()) continue;
                     Path temporary = Files.createTempFile(target.toAbsolutePath().getParent(), ".hosthop-cache-", ".tmp");

@@ -52,6 +52,21 @@ public final class GoogleDriveAuthorization {
         this.clientId = clientId; this.clientSecret = clientSecret; this.exchange = exchange;
     }
 
+    /** Compare account identities without exposing account names or storing them in the invitation. */
+    String accountId(String accessToken) throws IOException, InterruptedException {
+        if (!valid(accessToken, 4096)) throw new IllegalArgumentException("Invalid access token");
+        var request = HttpRequest.newBuilder(URI.create("https://www.googleapis.com/drive/v3/about?fields=user%28permissionId%29"))
+                .timeout(Duration.ofSeconds(15)).header("Authorization", "Bearer " + accessToken).GET().build();
+        byte[] data = exchange.send(request);
+        if (data == null || data.length > 65536) throw new IOException("Google account identity unavailable");
+        try {
+            String id = JsonParser.parseString(new String(data, StandardCharsets.UTF_8)).getAsJsonObject()
+                    .getAsJsonObject("user").get("permissionId").getAsString();
+            if (!valid(id, 256)) throw new IOException("Google account identity unavailable");
+            return id;
+        } catch (RuntimeException invalid) { throw new IOException("Google account identity unavailable", invalid); }
+    }
+
     /** Starts only a loopback listener; the caller explicitly opens authorizationUri in the user's browser. */
     public Session begin(String expectedFolder) throws IOException {
         if (expectedFolder != null && !expectedFolder.matches("[A-Za-z0-9_-]{1,200}")) throw new IllegalArgumentException("Invalid folder ID");

@@ -356,6 +356,39 @@ tasks.register('localSnapshotCacheCheck', JavaExec) {
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.snapshot.LocalSnapshotCacheTest'
 }
+tasks.register('binaryDeltaCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.snapshot.BinaryDeltaTest'
+}
+tasks.register('binaryDeltaFileCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.snapshot.BinaryDeltaFileCheck'
+    if (project.hasProperty('deltaBase') && project.hasProperty('deltaTarget') && project.hasProperty('deltaOutput'))
+        args project.property('deltaBase'), project.property('deltaTarget'), project.property('deltaOutput')
+}
+tasks.register('deltaLiveCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.DeltaLiveCheck'
+    if (project.hasProperty('deltaInvitation') && project.hasProperty('deltaCredentials') && project.hasProperty('deltaDirectory'))
+        args project.property('deltaInvitation'), project.property('deltaCredentials'), project.property('deltaDirectory')
+}
+tasks.register('deltaAccessLiveCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.DeltaAccessLiveCheck'
+    if (project.hasProperty('deltaInvitation') && project.hasProperty('deltaCredentials') && project.hasProperty('deltaOtherCredentials') && project.hasProperty('deltaDirectory'))
+        args project.property('deltaInvitation'), project.property('deltaCredentials'), project.property('deltaOtherCredentials'), project.property('deltaDirectory')
+}
+tasks.register('deltaCrossAccountLiveCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.DeltaCrossAccountLiveCheck'
+    if (project.hasProperty('deltaInvitation') && project.hasProperty('deltaOtherCredentials') && project.hasProperty('deltaCredentials') && project.hasProperty('deltaDirectory'))
+        args project.property('deltaInvitation'), project.property('deltaOtherCredentials'), project.property('deltaCredentials'), project.property('deltaDirectory')
+}
 tasks.register('driveLiveCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath
@@ -408,7 +441,7 @@ tasks.register('prepareClientCredentials', JavaExec) {
         args project.property('clientInvitation'), project.property('clientDriveCredentials'), project.property('clientCredentialsOutput')
     }
 }
-tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck'), tasks.named('invitationSafetyCheck'), tasks.named('pendingHostRecoveryCheck'), tasks.named('hostPlayerIdentityCheck'), tasks.named('localSnapshotCacheCheck') }
+tasks.named('check') { dependsOn tasks.named('safetyCheck'), tasks.named('leaseSafetyCheck'), tasks.named('hostGateSafetyCheck'), tasks.named('reconnectSafetyCheck'), tasks.named('leaseClientSafetyCheck'), tasks.named('leaseHttpsSafetyCheck'), tasks.named('leaseCoordinatorSafetyCheck'), tasks.named('snapshotSafetyCheck'), tasks.named('driveStorageSafetyCheck'), tasks.named('driveAuthorizationSafetyCheck'), tasks.named('windowsSecretSafetyCheck'), tasks.named('invitationSafetyCheck'), tasks.named('pendingHostRecoveryCheck'), tasks.named('hostPlayerIdentityCheck'), tasks.named('localSnapshotCacheCheck'), tasks.named('binaryDeltaCheck') }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {

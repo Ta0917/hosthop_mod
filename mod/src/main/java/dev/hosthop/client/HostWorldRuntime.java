@@ -226,7 +226,7 @@ public final class HostWorldRuntime {
         if (candidate == null) return false;
         try (var lock = dev.hosthop.snapshot.StoppedWorldLock.acquire(candidate.world())) {
             var recovery = gate.beginRecovery(candidate.record());
-            transfer.recoverStopped(recovery, candidate.journal(), true, driveToken);
+            transfer.recoverStopped(recovery, candidate.journal(), true, driveToken, invitation.folder());
             Files.delete(pendingPath);
             Files.delete(candidate.journal());
         }
@@ -353,7 +353,7 @@ public final class HostWorldRuntime {
                             UUID.randomUUID().toString(), invitation.folder(), token, true);
                 } catch (IOException | InterruptedException failure) {
                     if (Files.exists(journal) && gate.phase() == LocalHostGate.Phase.STOP_REQUIRED)
-                        transfer.recoverStopped(acquisition.attempt(), journal, true, token);
+                        transfer.recoverStopped(acquisition.attempt(), journal, true, token, invitation.folder());
                     else if (Files.exists(journal) && gate.phase() == LocalHostGate.Phase.RELEASE_REQUIRED)
                         transfer.completeRelease(acquisition.attempt(), journal, PendingPublicationJournal.read(journal), true);
                     else throw failure;

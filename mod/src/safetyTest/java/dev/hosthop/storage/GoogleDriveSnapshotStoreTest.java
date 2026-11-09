@@ -42,6 +42,24 @@ public final class GoogleDriveSnapshotStoreTest {
             var uploaded = store.upload(archive, "folder", "test-token", progress::add);
             check(progress.size() == 3 && progress.get(0) == 0 && progress.get(1) > 0 && progress.get(1) < 100 && progress.get(2) == 100);
             check(calls.get() == 4 && uploaded.fileId().equals("file-id") && uploaded.sha256().equals(hash) && uploaded.size() == size);
+            var permission = new GoogleDriveSnapshotStore(request -> reply(404, Map.of(), ""));
+            check(!permission.canRead(uploaded, "test-token"));
+            check(!permission.canUseBase(uploaded, "folder", "test-token"));
+            var baseMetadata = new GoogleDriveSnapshotStore(request -> reply(200, Map.of(), "{\"id\":\"file-id\",\"name\":\"" + hash
+                    + ".zip\",\"size\":\"" + size + "\",\"sha256Checksum\":\"" + hash + "\",\"parents\":[\"folder\"],\"trashed\":false}"));
+            check(baseMetadata.canUseBase(uploaded, "folder", "test-token"));
+            try { baseMetadata.canUseBase(uploaded, "wrong-folder", "test-token"); throw new AssertionError("wrong base folder accepted"); }
+            catch (IOException expected) { }
+            var inspection = new GoogleDriveSnapshotStore(request -> {
+                if (request.headers().firstValue("Range").isPresent()) {
+                    check(request.headers().firstValue("Range").orElseThrow().equals("bytes=0-7"));
+                    return reply(206, Map.of(), "HHDIFF01");
+                }
+                return reply(200, Map.of(), "{\"id\":\"file-id\"}");
+            });
+            check(inspection.canRead(uploaded, "test-token") && inspection.isDelta(uploaded, "test-token"));
+            var fullPrefix = new GoogleDriveSnapshotStore(request -> reply(206, Map.of(), "PK\u0003\u0004abcd"));
+            check(!fullPrefix.isDelta(uploaded, "test-token"));
             var blockedCalls = new AtomicInteger();
             var full = new GoogleDriveSnapshotStore(request -> {
                 blockedCalls.incrementAndGet();

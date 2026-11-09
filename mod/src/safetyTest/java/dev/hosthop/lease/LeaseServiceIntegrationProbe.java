@@ -62,9 +62,11 @@ public final class LeaseServiceIntegrationProbe {
             var http = HttpClient.newBuilder().sslContext(tls).followRedirects(HttpClient.Redirect.NEVER).build();
             var client = new LeaseAuthorityClient(base, "a".repeat(43), LeaseAuthorityClient.httpExchange(http, Duration.ofSeconds(5)), System::nanoTime, System::currentTimeMillis);
             var downloads = new java.util.concurrent.atomic.AtomicInteger();
+            var baseAvailable = new java.util.concurrent.atomic.AtomicBoolean(true);
             SnapshotStore storage = new SnapshotStore() {
                 private int uploaded;
                 private final java.util.Map<String, Path> objects = new java.util.HashMap<>();
+                @Override public boolean canUseBase(GoogleDriveSnapshotStore.ObjectRef object, String folder, String token) { return baseAvailable.get() && objects.containsKey(object.fileId()); }
                 @Override public GoogleDriveSnapshotStore.ObjectRef upload(Path archive, String folder, String driveToken) throws java.io.IOException, InterruptedException {
                     String fileId = "file-" + ++uploaded;
                     Path target = directory.resolve("remote-" + uploaded + ".zip");
@@ -82,9 +84,15 @@ public final class LeaseServiceIntegrationProbe {
                     Files.copy(objects.get(object.fileId()), destination);
                     return SnapshotVerifier.verify(destination);
                 }
+                @Override public void downloadRaw(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String driveToken) throws java.io.IOException {
+                    downloads.incrementAndGet();
+                    Files.copy(objects.get(object.fileId()), destination);
+                }
             };
             Files.createDirectory(initial);
             Files.writeString(initial.resolve("level.dat"), "initial");
+            byte[] bulk = new byte[2 * 1024 * 1024]; new java.util.Random(42).nextBytes(bulk);
+            Files.write(initial.resolve("bulk.dat"), bulk);
             Files.writeString(initial.resolve("session.lock"), "lock");
             var gate = new LocalHostGate();
             var coordinator = new LeaseCoordinator(gate, client, System::nanoTime, System::currentTimeMillis);
@@ -157,20 +165,42 @@ public final class LeaseServiceIntegrationProbe {
             nextTransfer.publishAfterStopped(nextAcquisition, preparedB, finalArchive2, journal2, "op-2", "folder", "drive-test-token");
             check(nextGate.phase() == LocalHostGate.Phase.IDLE && !Files.exists(journal2));
             check(client.snapshot("world").generation() == 2);
+            check(dev.hosthop.snapshot.BinaryDelta.isDelta(remote2) && Files.size(remote2) < Files.size(finalArchive2) / 2);
+            // A different client has neither the delta nor its base and fetches both.
+            var deltaGate = new LocalHostGate();
+            var deltaCoordinator = new LeaseCoordinator(deltaGate, client, System::nanoTime, System::currentTimeMillis);
+            var deltaAcquisition = deltaCoordinator.begin("world", "delta-host", "owner", 30, 2);
+            check(deltaCoordinator.acquire(deltaAcquisition));
+            var deltaDir = Files.createDirectory(directory.resolve("delta-session"));
+            var deltaWorld = deltaDir.resolve("world");
+            new SharedWorldTransfer(deltaGate, client, storage, System::nanoTime, System::currentTimeMillis)
+                    .prepare(deltaAcquisition, null, deltaDir.resolve("initial.zip"), deltaWorld, "drive-test-token");
+            check(downloads.get() == 2 && Files.readString(deltaWorld.resolve("level.dat")).equals("progress-2"));
+            check(java.util.Arrays.equals(Files.readAllBytes(deltaWorld.resolve("bulk.dat")), bulk));
+            check(deltaCoordinator.abortBeforeHosting(deltaAcquisition));
             // Simulate a crash after writing the local journal but before sending
             // the commit: retry the exact operation, then release it safely.
             var beforeCommitGate = new LocalHostGate();
             var beforeCommit = new LeaseCoordinator(beforeCommitGate, client, System::nanoTime, System::currentTimeMillis);
             var beforeCommitLease = beforeCommit.begin("world", "pending-lease", "owner", 30, 2);
             check(beforeCommit.acquire(beforeCommitLease));
-            var object = storage.upload(finalArchive2, "folder", "drive-test-token");
+            var object = storage.upload(remote2, "folder", "drive-test-token");
             var missingRecord = new PublicationRecord("world", "not-yet-sent", "owner", "pending-lease",
                     beforeCommitLease.epoch(), 2, object.sha256(), object.fileId(), object.size(), 3);
             var missingJournal = directory.resolve("not-yet-sent");
             PendingPublicationJournal.create(missingJournal, missingRecord);
+            baseAvailable.set(false);
+            var blockedGate = new LocalHostGate();
+            var blockedTransfer = new SharedWorldTransfer(blockedGate, client, storage, System::nanoTime, System::currentTimeMillis);
+            try {
+                blockedTransfer.recoverStopped(blockedGate.beginRecovery(missingRecord), missingJournal, true, "drive-test-token", "folder");
+                throw new AssertionError("missing delta base accepted");
+            } catch (java.io.IOException expected) { }
+            check(Files.exists(missingJournal) && client.snapshot("world").generation() == 2);
+            baseAvailable.set(true);
             var recoverGate = new LocalHostGate();
             var recoverTransfer = new SharedWorldTransfer(recoverGate, client, storage, System::nanoTime, System::currentTimeMillis);
-            recoverTransfer.recoverStopped(recoverGate.beginRecovery(missingRecord), missingJournal, true, "drive-test-token");
+            recoverTransfer.recoverStopped(recoverGate.beginRecovery(missingRecord), missingJournal, true, "drive-test-token", "folder");
             check(Files.exists(missingJournal) && recoverGate.phase() == LocalHostGate.Phase.IDLE && client.snapshot("world").generation() == 3);
             check(client.history("world").stream().map(LeaseAuthorityClient.Snapshot::generation).toList().equals(java.util.List.of(3L, 2L, 1L)));
             Files.delete(missingJournal);
@@ -228,12 +258,15 @@ public final class LeaseServiceIntegrationProbe {
                 if (!bridge.waitFor(10, TimeUnit.SECONDS)) bridge.destroyForcibly();
             }
             Files.deleteIfExists(initial.resolve("level.dat"));
+            Files.deleteIfExists(initial.resolve("bulk.dat"));
             Files.deleteIfExists(initial.resolve("session.lock"));
             Files.deleteIfExists(initial);
             Files.deleteIfExists(preparedA.resolve("level.dat"));
+            Files.deleteIfExists(preparedA.resolve("bulk.dat"));
             Files.deleteIfExists(preparedA.resolve("session.lock"));
             Files.deleteIfExists(preparedA);
             Files.deleteIfExists(preparedB.resolve("level.dat"));
+            Files.deleteIfExists(preparedB.resolve("bulk.dat"));
             Files.deleteIfExists(preparedB.resolve("session.lock"));
             Files.deleteIfExists(preparedB);
             Files.deleteIfExists(archiveA);
@@ -251,6 +284,14 @@ public final class LeaseServiceIntegrationProbe {
             Files.deleteIfExists(journal);
             Files.deleteIfExists(journal2);
             Files.deleteIfExists(finalArchive2);
+            Files.deleteIfExists(directory.resolve("delta.bin"));
+            Files.deleteIfExists(directory.resolve("delta-session/world/level.dat"));
+            Files.deleteIfExists(directory.resolve("delta-session/world/bulk.dat"));
+            Files.deleteIfExists(directory.resolve("delta-session/world"));
+            Files.deleteIfExists(directory.resolve("delta-session/initial.zip"));
+            Files.deleteIfExists(directory.resolve("delta-session/base.zip"));
+            Files.deleteIfExists(directory.resolve("delta-session/remote-object.bin"));
+            Files.deleteIfExists(directory.resolve("delta-session"));
             Files.deleteIfExists(directory.resolve("cached-sessions/previous/final.zip"));
             Files.deleteIfExists(directory.resolve("cached-sessions/previous"));
             Files.deleteIfExists(directory.resolve("cached-sessions"));

@@ -9,6 +9,8 @@ import java.util.function.LongConsumer;
 public interface SnapshotStore {
     /** Check capacity against an estimated upload size, if supported. */
     default void checkUploadCapacity(long bytes, String accessToken) throws IOException, InterruptedException {}
+    /** A delta may reference a base only after the store validates its remote metadata. */
+    default boolean canUseBase(GoogleDriveSnapshotStore.ObjectRef base, String folderId, String accessToken) throws IOException, InterruptedException { return false; }
     GoogleDriveSnapshotStore.ObjectRef upload(Path archive, String folderId, String accessToken) throws IOException, InterruptedException;
     default GoogleDriveSnapshotStore.ObjectRef upload(Path archive, String folderId, String accessToken, LongConsumer progress) throws IOException, InterruptedException {
         var object = upload(archive, folderId, accessToken);
@@ -16,4 +18,8 @@ public interface SnapshotStore {
         return object;
     }
     SnapshotVerifier.Result download(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String accessToken) throws IOException, InterruptedException;
+    /** Download an authenticated full snapshot or delta container without interpreting its contents. */
+    default void downloadRaw(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String accessToken) throws IOException, InterruptedException {
+        download(object, destination, accessToken);
+    }
 }

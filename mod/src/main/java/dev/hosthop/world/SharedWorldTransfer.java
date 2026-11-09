@@ -10,6 +10,7 @@ import dev.hosthop.snapshot.SnapshotVerifier;
 import dev.hosthop.snapshot.SnapshotWriter;
 import dev.hosthop.snapshot.StoppedWorldLock;
 import dev.hosthop.snapshot.LocalSnapshotCache;
+import dev.hosthop.snapshot.BinaryDelta;
 import dev.hosthop.storage.SnapshotStore;
 import dev.hosthop.storage.GoogleDriveSnapshotStore;
 import java.io.IOException;
@@ -24,6 +25,8 @@ public final class SharedWorldTransfer {
     private final SnapshotStore storage;
     private final LongSupplier nanos, millis;
     private final java.util.function.LongConsumer uploadProgress;
+    private GoogleDriveSnapshotStore.ObjectRef baseRef;
+    private Path baseArchive;
 
     public SharedWorldTransfer(LocalHostGate gate, LeaseAuthorityClient authority, SnapshotStore storage,
                                LongSupplier nanos, LongSupplier millis) {
@@ -54,14 +57,32 @@ public final class SharedWorldTransfer {
         } else {
             var snapshot = authority.snapshot(acquisition.world());
             if (snapshot.generation() != acquisition.generation()) throw new IOException("Snapshot generation changed");
+            Path stored = archive.resolveSibling("remote-object.bin");
             boolean cached = false;
-            try { if (cacheSessions != null) cached = LocalSnapshotCache.copyMatching(cacheSessions, archive, snapshot.object()); }
+            try { if (cacheSessions != null) cached = LocalSnapshotCache.copyMatching(cacheSessions, stored, snapshot.object()); }
             catch (IOException cacheError) {
-                if (Files.exists(archive)) throw cacheError;
+                if (Files.exists(stored)) throw cacheError;
                 cached = false;
             }
             if (!cached)
-                storage.download(snapshot.object(), archive, driveToken);
+                storage.downloadRaw(snapshot.object(), stored, driveToken);
+            if (BinaryDelta.isDelta(stored)) {
+                var delta = BinaryDelta.inspect(stored);
+                Path base = archive.resolveSibling("base.zip");
+                boolean baseCached = false;
+                try { if (cacheSessions != null) baseCached = LocalSnapshotCache.copyMatching(cacheSessions, base, delta.base()); }
+                catch (IOException cacheError) {
+                    if (Files.exists(base)) throw cacheError;
+                }
+                if (!baseCached) storage.download(delta.base(), base, driveToken);
+                else SnapshotVerifier.verify(base);
+                BinaryDelta.apply(stored, base, archive);
+                baseRef = delta.base(); baseArchive = base;
+            } else {
+                SnapshotVerifier.verify(stored);
+                Files.move(stored, archive);
+                baseRef = snapshot.object(); baseArchive = archive;
+            }
         }
         storage.checkUploadCapacity(Files.size(archive), driveToken);
         SnapshotVerifier.restore(archive, destination);
@@ -89,12 +110,35 @@ public final class SharedWorldTransfer {
         if (!gate.serverStoppedForSnapshot(acquisition.attempt(), nanos.getAsLong(), millis.getAsLong()))
             throw new IOException("Server stop was not accepted");
         try (var lock = StoppedWorldLock.acquire(stoppedWorld)) { SnapshotWriter.create(stoppedWorld, archive); }
+        Path upload = archive;
+        if (baseRef != null && baseArchive != null && storage.canUseBase(baseRef, folderId, driveToken)) {
+            Path delta = archive.resolveSibling("delta.bin");
+            Path verified = archive.resolveSibling("delta-verified.zip");
+            if (!Files.exists(delta, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.exists(verified, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                boolean deltaCreated = false, verifiedCreated = false;
+                try {
+                    BinaryDelta.create(baseArchive, baseRef, archive, delta);
+                    deltaCreated = true;
+                    if (Files.size(delta) < Files.size(archive) * 3 / 4) {
+                        BinaryDelta.apply(delta, baseArchive, verified);
+                        verifiedCreated = true;
+                        if (Files.mismatch(archive, verified) != -1) throw new IOException("Delta verification mismatch");
+                        upload = delta;
+                    } else Files.delete(delta);
+                } catch (IOException deltaError) {
+                    com.mojang.logging.LogUtils.getLogger().warn("HostHop delta unavailable; using full snapshot ({})", deltaError.getClass().getSimpleName());
+                    if (deltaCreated) Files.deleteIfExists(delta);
+                } finally { if (verifiedCreated) Files.deleteIfExists(verified); }
+            }
+        }
         GoogleDriveSnapshotStore.ObjectRef object;
-        try { object = storage.upload(archive, folderId, driveToken, uploadProgress); }
+        try { object = storage.upload(upload, folderId, driveToken, uploadProgress); }
         catch (IOException | InterruptedException failure) {
             com.mojang.logging.LogUtils.getLogger().warn("HostHop snapshot upload failed ({})", failure.getClass().getSimpleName());
             throw failure;
         }
+        if (!upload.equals(archive) && !storage.canUseBase(baseRef, folderId, driveToken))
+            throw new IOException("Delta base is unavailable before commit");
         if (!gate.finalSnapshotVerified(acquisition.attempt(), acquisition.generation(), nanos.getAsLong(), millis.getAsLong()))
             throw new IOException("Lease expired before publication");
         var operation = new PublicationRecord(acquisition.world(), operationId, acquisition.principal(), acquisition.lease(),
@@ -140,12 +184,28 @@ public final class SharedWorldTransfer {
 
     /** An unconfirmed operation may be safely retried only with its exact persisted identity. */
     public void recoverStopped(LocalHostGate.Attempt attempt, Path journal, boolean retainJournal, String driveToken) throws IOException, InterruptedException {
+        recoverStopped(attempt, journal, retainJournal, driveToken, null);
+    }
+
+    public void recoverStopped(LocalHostGate.Attempt attempt, Path journal, boolean retainJournal, String driveToken, String folderId) throws IOException, InterruptedException {
         var operation = PendingPublicationJournal.read(journal);
         if (!gate.awaitingReconciliation(attempt, operation)) throw new IOException("Publication recovery state mismatch");
         PublicationRecord receipt;
         try { receipt = authority.commitStatus(operation); }
         catch (LeaseAuthorityClient.PublicationNotFound missing) {
             if (driveToken == null) throw missing;
+            // A previously uploaded delta is useful only while its immutable base
+            // remains available. Check again before retrying an uncertain commit.
+            Path downloaded = journal.resolveSibling("recovery-object-" + java.util.UUID.randomUUID() + ".bin");
+            boolean downloadedHere = false;
+            try {
+                storage.downloadRaw(new GoogleDriveSnapshotStore.ObjectRef(operation.objectId(), operation.digest(), operation.objectSize()), downloaded, driveToken);
+                downloadedHere = true;
+                if (BinaryDelta.isDelta(downloaded)) {
+                    var base = BinaryDelta.inspect(downloaded).base();
+                    if (folderId == null || !storage.canUseBase(base, folderId, driveToken)) throw new IOException("Delta base is unavailable during recovery");
+                } else SnapshotVerifier.verify(downloaded);
+            } finally { if (downloadedHere) Files.deleteIfExists(downloaded); }
             receipt = authority.commit(operation, driveToken);
         }
         authority.release(operation);

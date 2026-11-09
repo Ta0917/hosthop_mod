@@ -20,14 +20,20 @@ public final class WindowsSecretStoreTest {
             check(store.load().equals(Map.of("refresh", "new-secret")));
             store.save(Map.of("drive_refresh_token", "refresh", "drive_folder_id", "folder", "member", "member-secret"));
             var calls = new java.util.concurrent.atomic.AtomicInteger();
+            var wrongAccount = new java.util.concurrent.atomic.AtomicBoolean();
+            var identityCalls = new java.util.concurrent.atomic.AtomicInteger();
             var auth = new GoogleDriveAuthorization("client-id", "client-secret", request -> {
                 calls.incrementAndGet();
+                if (request.method().equals("GET")) {
+                    String account = wrongAccount.get() && identityCalls.getAndIncrement() == 1 ? "other" : "original";
+                    return ("{\"user\":{\"permissionId\":\"" + account + "\"}}").getBytes(StandardCharsets.UTF_8);
+                }
                 return "{\"access_token\":\"access\",\"refresh_token\":\"new-refresh\",\"expires_in\":3600,\"token_type\":\"Bearer\"}".getBytes(StandardCharsets.UTF_8);
             });
             var manager = new DriveCredentialManager(store, auth);
             check(manager.access().accessToken().equals("access") && manager.access().folderId().equals("folder") && calls.get() == 1);
             check(store.load().get("drive_refresh_token").equals("new-refresh") && store.load().get("member").equals("member-secret"));
-            manager.authorizeFile("snapshot-id", "folder", uri -> {
+            java.util.function.Consumer<java.net.URI> select = uri -> {
                 try {
                     var query = new java.util.HashMap<String, String>();
                     for (String pair : uri.getRawQuery().split("&")) {
@@ -40,9 +46,15 @@ public final class WindowsSecretStoreTest {
                             java.net.http.HttpResponse.BodyHandlers.discarding());
                     check(response.statusCode() == 200);
                 } catch (Exception failure) { throw new RuntimeException(failure); }
-            });
+            };
+            manager.authorizeFile("snapshot-id", "folder", select);
             check(manager.access().folderId().equals("folder") && store.load().get("drive_folder_id").equals("folder"));
             check(store.load().get("member").equals("member-secret"));
+            var before = store.load();
+            identityCalls.set(0); wrongAccount.set(true);
+            try { manager.authorizeFile("snapshot-id", "folder", select); throw new AssertionError("different Google account accepted"); }
+            catch (DriveCredentialManager.AccountMismatch expected) { }
+            check(store.load().equals(before));
             Files.write(file, new byte[] { 1, 2, 3 });
             try { store.load(); throw new AssertionError("corrupted secrets accepted"); }
             catch (IOException expected) { }
