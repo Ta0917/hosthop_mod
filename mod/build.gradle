@@ -370,6 +370,13 @@ tasks.register('backupRestoreCheck', JavaExec) {
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.world.BackupRestoreTest'
 }
+tasks.register('backupRestoreLiveCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.BackupRestoreLiveCheck'
+    if (project.hasProperty('deltaInvitation') && project.hasProperty('deltaCredentials') && project.hasProperty('deltaDirectory'))
+        args project.property('deltaInvitation'), project.property('deltaCredentials'), project.property('deltaDirectory')
+}
 tasks.register('hostPlayerIdentityCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath
