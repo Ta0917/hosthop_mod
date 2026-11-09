@@ -233,12 +233,11 @@ public final class LeaseServiceIntegrationProbe {
             var expiredGate = new LocalHostGate();
             var expiredRecovery = new SharedWorldTransfer(expiredGate, client, storage, System::nanoTime, System::currentTimeMillis);
             try {
-                expiredRecovery.recoverStopped(expiredGate.beginRecovery(expiredRecord), expiredJournal, true, "drive-test-token");
+                expiredRecovery.recoverStopped(expiredGate.beginRecovery(expiredRecord), expiredJournal, true, "drive-test-token", "folder");
                 throw new AssertionError("Expired lease committed a pending snapshot");
             } catch (java.io.IOException expected) { }
             check(Files.exists(expiredJournal) && expiredGate.phase() == LocalHostGate.Phase.STOP_REQUIRED
                     && client.snapshot("world").generation() == 4);
-            Files.delete(expiredJournal);
             try { third.renew(thirdAcquisition); throw new AssertionError("expired lease renewed"); }
             catch (java.io.IOException expected) { }
             check(thirdGate.phase() == LocalHostGate.Phase.STOP_REQUIRED);
@@ -250,6 +249,39 @@ public final class LeaseServiceIntegrationProbe {
             check(otherGate.phase() == LocalHostGate.Phase.ACQUIRING);
             try { client.endpoint("world", 2); throw new AssertionError("expired endpoint returned"); }
             catch (java.io.IOException expected) { }
+            post(http, base, "/test-object", "{\"fileId\":\"" + object.fileId() + "\",\"digest\":\"" + object.sha256() + "\",\"size\":" + object.size() + "}");
+            var verifiedGate = new LocalHostGate();
+            var verifiedRecovery = new SharedWorldTransfer(verifiedGate, client, storage, System::nanoTime, System::currentTimeMillis);
+            try {
+                verifiedRecovery.recoverStopped(verifiedGate.beginRecovery(expiredRecord), expiredJournal, true, "drive-test-token", "folder", true);
+                throw new AssertionError("lost recovery response was accepted");
+            } catch (java.io.IOException expected) { }
+            check(Files.exists(expiredJournal) && client.snapshot("world").generation() == 5);
+            var resumedRecoveryGate = new LocalHostGate();
+            new SharedWorldTransfer(resumedRecoveryGate, client, storage, System::nanoTime, System::currentTimeMillis)
+                    .recoverStopped(resumedRecoveryGate.beginRecovery(expiredRecord), expiredJournal, true, "drive-test-token", "folder", true);
+            check(resumedRecoveryGate.phase() == LocalHostGate.Phase.IDLE);
+            var successorGate = new LocalHostGate();
+            var successorCoordinator = new LeaseCoordinator(successorGate, client, System::nanoTime, System::currentTimeMillis);
+            var successorLease = successorCoordinator.begin("world", "recovered-successor", "owner", 30, 2);
+            check(successorCoordinator.acquire(successorLease) && successorLease.generation() == 5);
+            check(successorCoordinator.abortBeforeHosting(successorLease));
+            Files.delete(expiredJournal);
+            var finalGate = new LocalHostGate();
+            var finalCoordinator = new LeaseCoordinator(finalGate, client, System::nanoTime, System::currentTimeMillis);
+            var finalLease = finalCoordinator.begin("world", "expired-without-journal", "owner", 30, 2);
+            check(finalCoordinator.acquire(finalLease));
+            post(http, base, "/test-expire", "{}");
+            var recoverySession = Files.createDirectory(directory.resolve("expired-recovery-session"));
+            var stopped = new dev.hosthop.world.PendingHostRecovery.Stopped(preparedB, recoverySession,
+                    finalLease.lease(), finalLease.epoch(), finalLease.generation());
+            var finalTransfer = new SharedWorldTransfer(new LocalHostGate(), client, storage, System::nanoTime, System::currentTimeMillis);
+            finalTransfer.publishExpiredStopped(stopped, "world", "owner", "folder", "drive-test-token");
+            check(client.snapshot("world").generation() == 6 && Files.exists(recoverySession.resolve("publication.dat")));
+            var recoveryReceipt = PendingPublicationJournal.read(recoverySession.resolve("publication.dat"));
+            check(client.commitStatus(recoveryReceipt).equals(recoveryReceipt) && client.releaseStatus(recoveryReceipt).matches(recoveryReceipt));
+            try (var files = Files.list(recoverySession)) { for (var file : files.toList()) Files.delete(file); }
+            Files.delete(recoverySession);
             System.out.println("PASS: Java HTTPS client to local workerd and D1");
         } finally {
             if (relayExecutor != null) relayExecutor.shutdownNow();
@@ -276,6 +308,7 @@ public final class LeaseServiceIntegrationProbe {
             Files.deleteIfExists(remote2);
             Files.deleteIfExists(directory.resolve("remote-3.zip"));
             Files.deleteIfExists(directory.resolve("remote-4.zip"));
+            Files.deleteIfExists(directory.resolve("remote-5.zip"));
             Files.deleteIfExists(directory.resolve("interrupted.zip"));
             Files.deleteIfExists(directory.resolve("retry.zip"));
             Files.deleteIfExists(directory.resolve("retry-journal"));

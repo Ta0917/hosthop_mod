@@ -37,14 +37,14 @@ async function readJson(request) {
 export function createLeaseService(sql, verifyObject = verifyDriveObject) {
   if (!sql?.acquire || !sql?.renew || !sql?.acquireStatus || !sql?.endpointUpdate || !sql?.endpointStatus || !sql?.endpointRevision
       || !sql?.commit || !sql?.commitStatus || !sql?.snapshotStatus || !sql?.release || !sql?.releaseStatus || !sql?.abort || !sql?.abortStatus || !sql?.hostStatus
-      || !sql?.cancelAcquisition || !sql?.cancelAcquisitionStatus || !sql?.history)
+      || !sql?.cancelAcquisition || !sql?.cancelAcquisitionStatus || !sql?.history || !sql?.recoverStopped)
     throw new Error('missing SQL');
   return {
     async fetch(request, env) {
       if (request.method !== 'POST') return json({ error: 'not found' }, 404);
       const route = new URL(request.url).pathname;
       if (!['/acquire', '/renew', '/acquire-status', '/endpoint-update', '/endpoint-status', '/endpoint-revision',
-        '/commit', '/commit-status', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/cancel-acquisition', '/history'].includes(route))
+        '/commit', '/commit-status', '/recover-stopped', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/cancel-acquisition', '/history'].includes(route))
         return json({ error: 'not found' }, 404);
       const auth = request.headers.get('Authorization') || '';
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -57,14 +57,14 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       if (['/acquire', '/renew', '/acquire-status'].includes(route)
           && (!Number.isSafeInteger(body.duration) || body.duration < 1 || body.duration > 300))
         return json({ error: 'invalid request' }, 400);
-      if (['/renew', '/endpoint-update', '/endpoint-revision', '/commit', '/commit-status', '/release', '/release-status', '/abort'].includes(route)
+      if (['/renew', '/endpoint-update', '/endpoint-revision', '/commit', '/commit-status', '/recover-stopped', '/release', '/release-status', '/abort'].includes(route)
           && (!Number.isSafeInteger(body.epoch) || body.epoch < 1))
         return json({ error: 'invalid request' }, 400);
       if (route === '/endpoint-update' && (!Number.isSafeInteger(body.revision) || body.revision < 0
           || (body.endpoint !== null && (typeof body.endpoint !== 'string' || body.endpoint.length > 253
               || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.e4mc\.link$/.test(body.endpoint)))))
         return json({ error: 'invalid request' }, 400);
-      if (['/commit', '/commit-status'].includes(route) && (!identifier(body.operation) || !Number.isSafeInteger(body.previousGeneration)
+      if (['/commit', '/commit-status', '/recover-stopped'].includes(route) && (!identifier(body.operation) || !Number.isSafeInteger(body.previousGeneration)
           || body.previousGeneration < 0 || typeof body.digest !== 'string' || !/^[0-9a-f]{64}$/.test(body.digest)
           || typeof body.fileId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(body.fileId)
           || !Number.isSafeInteger(body.size) || body.size < 1 || body.size > 68_719_476_736))
@@ -117,7 +117,7 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
         const snapshot = await env.DB.prepare(sql.snapshotStatus).bind(body.world).first();
         return snapshot ? json(snapshot) : json({ error: 'unknown world' }, 404);
       }
-      if (route === '/commit' || route === '/commit-status') {
+      if (route === '/commit' || route === '/commit-status' || route === '/recover-stopped') {
         const find = () => env.DB.prepare(sql.commitStatus).bind(body.world, body.operation).first();
         const matches = row => row && row.owner === member.owner && row.lease_id === body.lease && row.epoch === body.epoch
           && row.previous_generation === body.previousGeneration && row.digest === body.digest && row.object_id === body.fileId
@@ -131,7 +131,9 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
             || /[\x00-\x20\x7f]/.test(body.driveToken)) return json({ error: 'invalid request' }, 400);
         if (!await verifyObject({ folder: world.folder, fileId: body.fileId, digest: body.digest, size: body.size, accessToken: body.driveToken }))
           return json({ error: 'snapshot verification failed' }, 422);
-        await env.DB.prepare(sql.commit).bind(body.world, body.operation, member.owner, body.lease, body.epoch,
+        // Recovery uses a single atomic transaction and is only safe when the
+        // owning client has independently verified its server and relay stopped.
+        await env.DB.prepare(route === '/recover-stopped' ? sql.recoverStopped : sql.commit).bind(body.world, body.operation, member.owner, body.lease, body.epoch,
           body.previousGeneration, body.digest, body.fileId, body.size).all();
         receipt = await find();
         return matches(receipt) ? json(receipt) : json({ error: 'lease conflict' }, 409);

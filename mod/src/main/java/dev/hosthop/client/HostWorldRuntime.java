@@ -237,7 +237,7 @@ public final class HostWorldRuntime {
         if (candidate == null) return false;
         try (var lock = dev.hosthop.snapshot.StoppedWorldLock.acquire(candidate.world())) {
             var recovery = gate.beginRecovery(candidate.record());
-            transfer.recoverStopped(recovery, candidate.journal(), true, driveToken, invitation.folder());
+            transfer.recoverStopped(recovery, candidate.journal(), true, driveToken, invitation.folder(), "stopped".equals(evidence.get("stage")));
             Files.delete(pendingPath);
             Files.delete(candidate.journal());
         }
@@ -251,16 +251,28 @@ public final class HostWorldRuntime {
         Path journal = stopped.session().resolve("publication.dat");
         // A journal may identify a commit already in flight; never replace it.
         if (Files.exists(journal, LinkOption.NOFOLLOW_LINKS)) return false;
-        LeaseCoordinator.Acquisition recovered;
+        LeaseCoordinator.Acquisition recovered = null;
         try (var lock = dev.hosthop.snapshot.StoppedWorldLock.acquire(stopped.world())) {
-            recovered = coordinator.begin(invitation.world(), stopped.lease(), invitation.principal(), 90, 5);
-            if (!coordinator.recoverAcquisition(recovered) || recovered.epoch() != stopped.epoch()
-                    || recovered.generation() != stopped.generation()
-                    || !gate.resumeStopped(recovered.attempt(), System.nanoTime(), System.currentTimeMillis()))
-                throw new IOException("Stopped host lease cannot be recovered");
-            acquisition = recovered;
+            var attempt = coordinator.begin(invitation.world(), stopped.lease(), invitation.principal(), 90, 5);
+            try {
+                if (coordinator.recoverAcquisition(attempt) && attempt.epoch() == stopped.epoch()
+                        && attempt.generation() == stopped.generation()
+                        && gate.resumeStopped(attempt.attempt(), System.nanoTime(), System.currentTimeMillis())) recovered = attempt;
+            } catch (IOException unavailable) { /* The original grant may have expired. */ }
+            if (recovered == null) {
+                gate.requireStop(attempt.attempt());
+                if (!gate.confirmStopped(attempt.attempt())) throw new IOException("Recovery gate could not be reset");
+            } else acquisition = recovered;
         }
-        var renewal = renewer.scheduleWithFixedDelay(() -> renew(recovered), 15, 15, TimeUnit.SECONDS);
+        if (recovered == null) {
+            tell("screen.hosthop.saving_world");
+            transfer.publishExpiredStopped(stopped, invitation.world(), invitation.principal(), invitation.folder(), driveToken);
+            Files.delete(pendingPath);
+            Files.delete(journal);
+            return true;
+        }
+        var activeRecovery = recovered;
+        var renewal = renewer.scheduleWithFixedDelay(() -> renew(activeRecovery), 15, 15, TimeUnit.SECONDS);
         try {
             Path archive = stopped.session().resolve("retry-" + UUID.randomUUID() + ".zip");
             transfer.publishAfterStopped(recovered, stopped.world(), archive, journal, UUID.randomUUID().toString(),

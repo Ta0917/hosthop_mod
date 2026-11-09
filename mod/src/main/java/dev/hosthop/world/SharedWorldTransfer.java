@@ -203,6 +203,10 @@ public final class SharedWorldTransfer {
     }
 
     public void recoverStopped(LocalHostGate.Attempt attempt, Path journal, boolean retainJournal, String driveToken, String folderId) throws IOException, InterruptedException {
+        recoverStopped(attempt, journal, retainJournal, driveToken, folderId, false);
+    }
+
+    public void recoverStopped(LocalHostGate.Attempt attempt, Path journal, boolean retainJournal, String driveToken, String folderId, boolean verifiedStopped) throws IOException, InterruptedException {
         var operation = PendingPublicationJournal.read(journal);
         if (!gate.awaitingReconciliation(attempt, operation)) throw new IOException("Publication recovery state mismatch");
         PublicationRecord receipt;
@@ -221,7 +225,11 @@ public final class SharedWorldTransfer {
                     if (folderId == null || !storage.canUseBase(base, folderId, driveToken)) throw new IOException("Delta base is unavailable during recovery");
                 } else SnapshotVerifier.verify(downloaded);
             } finally { if (downloadedHere) Files.deleteIfExists(downloaded); }
-            receipt = authority.commit(operation, driveToken);
+            try { receipt = authority.commit(operation, driveToken); }
+            catch (IOException failure) {
+                if (!verifiedStopped) throw failure;
+                receipt = authority.recoverStopped(operation, driveToken);
+            }
         }
         authority.release(operation);
         synchronized (gate) {
@@ -230,5 +238,20 @@ public final class SharedWorldTransfer {
             if (!retainJournal) Files.delete(journal);
             if (!gate.confirmStopped(attempt)) throw new IOException("Stop confirmation rejected");
         }
+    }
+
+    /** Save a verified stopped world without reviving its expired hosting lease. */
+    public void publishExpiredStopped(PendingHostRecovery.Stopped stopped, String world, String principal,
+                                      String folder, String driveToken) throws IOException, InterruptedException {
+        Path journal = stopped.session().resolve("publication.dat");
+        if (Files.exists(journal, java.nio.file.LinkOption.NOFOLLOW_LINKS)) throw new IOException("Publication already pending");
+        Path archive = stopped.session().resolve("expired-recovery-" + java.util.UUID.randomUUID() + ".zip");
+        try (var lock = StoppedWorldLock.acquire(stopped.world())) { SnapshotWriter.create(stopped.world(), archive); }
+        var object = storage.upload(archive, folder, driveToken, uploadProgress);
+        var operation = new PublicationRecord(world, java.util.UUID.randomUUID().toString(), principal, stopped.lease(),
+                stopped.epoch(), stopped.generation(), object.sha256(), object.fileId(), object.size(), stopped.generation() + 1);
+        PendingPublicationJournal.create(journal, operation);
+        authority.recoverStopped(operation, driveToken);
+        authority.release(operation);
     }
 }

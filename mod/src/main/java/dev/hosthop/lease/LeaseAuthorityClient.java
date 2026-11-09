@@ -273,6 +273,15 @@ public final class LeaseAuthorityClient {
         return matchPublication(operation, post("commit-status", publicationBody(operation)));
     }
 
+    /** Only a verified stopped host may request atomic publication and release of its expired lease. */
+    public PublicationRecord recoverStopped(PublicationRecord operation, String driveToken) throws IOException, InterruptedException {
+        if (driveToken == null || driveToken.isBlank() || driveToken.length() > 2048 || driveToken.chars().anyMatch(Character::isISOControl))
+            throw new IllegalArgumentException("Invalid Drive token");
+        var body = publicationBody(operation);
+        body.addProperty("driveToken", driveToken);
+        return matchPublication(operation, post("recover-stopped", body));
+    }
+
     public ReleaseRecord release(PublicationRecord operation) throws IOException, InterruptedException {
         return releaseRequest("release", operation);
     }

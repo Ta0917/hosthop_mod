@@ -10,6 +10,7 @@ const { Miniflare, convertV4MiniflareOptions } = require(resolve(process.argv[2]
 const here = dirname(fileURLToPath(import.meta.url));
 const load = name => readFileSync(join(here, name), 'utf8');
 const schema = load('schema.sql').replace(/^--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
+const migration = load('recover_stopped_migration.sql').replace(/^\s*--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
 const token = 'q'.repeat(43);
 const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))),
   value => value.toString(16).padStart(2, '0')).join('');
@@ -26,6 +27,7 @@ const check = (value, message) => { if (!value) throw new Error(message); };
 try {
   const db = await mf.getD1Database('DB');
   await db.batch(schema.map(statement => db.prepare(statement)));
+  await db.batch(migration.map(statement => db.prepare(statement)));
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('test-world').run();
   const call = (route, body, credential = token) => mf.dispatchFetch(`http://localhost/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),

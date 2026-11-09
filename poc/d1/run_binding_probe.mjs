@@ -12,6 +12,8 @@ const { Miniflare, convertV4MiniflareOptions } = require(resolve(process.argv[2]
 const here = dirname(fileURLToPath(import.meta.url));
 const load = name => readFileSync(join(here, name), 'utf8');
 const schema = load('schema.sql').replace(/^--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
+const recoveryMigration = load('recover_stopped_migration.sql').replace(/^\s*--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
+const recoverStopped = load('recover_stopped.sql');
 const acquire = load('acquire.sql');
 const acquireStatus = load('acquire_status.sql');
 const renew = load('renew.sql');
@@ -40,6 +42,36 @@ function check(condition, message) { if (!condition) throw new Error(message); }
 try {
   const db = await mf.getD1Database('DB');
   await db.batch(schema.map(statement => db.prepare(statement)));
+  await db.batch(recoveryMigration.map(statement => db.prepare(statement)));
+  await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('recovery-world').run();
+  const recoveryGrant = await db.prepare(acquire).bind('recovery-world', 'owner', 'lease', 120).first();
+  const recover = (owner, operation, generation = 0) => db.prepare(recoverStopped)
+    .bind('recovery-world', operation, owner, 'lease', recoveryGrant.epoch, generation, 'digest', 'object', 42).all();
+  check((await recover('owner', 'active')).results.length === 0, 'active lease was recovered');
+  await db.prepare("UPDATE worlds SET expires=unixepoch('now') WHERE id=?1").bind('recovery-world').run();
+  check((await recover('other', 'wrong-owner')).results.length === 0, 'other owner recovered stopped lease');
+  check((await recover('owner', 'wrong-generation', 1)).results.length === 0, 'stale generation recovered');
+  const recoveryAttempts = await Promise.all(Array.from({ length: 5 }, (_, i) => recover('owner', `recover-${i}`)));
+  check(recoveryAttempts.reduce((sum, result) => sum + result.results.length, 0) === 1, 'recovery did not commit exactly once');
+  const recoveredWorld = await db.prepare('SELECT owner,lease_id,generation FROM worlds WHERE id=?1').bind('recovery-world').first();
+  check(recoveredWorld.owner === null && recoveredWorld.lease_id === null && recoveredWorld.generation === 1, 'recovery did not atomically release');
+  check((await db.prepare(renew).bind('recovery-world', 'owner', 'lease', recoveryGrant.epoch, 120).all()).results.length === 0, 'old host renewed after recovery');
+  const successor = await db.prepare(acquire).bind('recovery-world', 'next', 'next-lease', 120).first();
+  check(successor.epoch === recoveryGrant.epoch + 1 && successor.generation === 1, 'successor did not receive recovered generation');
+  check((await recover('owner', 'late')).results.length === 0, 'old recovery affected successor');
+  await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('recovery-rollback').run();
+  const rollbackGrant = await db.prepare(acquire).bind('recovery-rollback', 'owner', 'lease', 120).first();
+  await db.prepare("UPDATE worlds SET expires=unixepoch('now') WHERE id=?1").bind('recovery-rollback').run();
+  await db.prepare("CREATE TRIGGER reject_test_recovery BEFORE INSERT ON lease_releases WHEN NEW.world_id='recovery-rollback' BEGIN SELECT RAISE(ABORT, 'injected recovery failure'); END").run();
+  let recoveryFailed = false;
+  try { await db.prepare(recoverStopped).bind('recovery-rollback', 'rollback-op', 'owner', 'lease', rollbackGrant.epoch, 0, 'digest', 'object', 42).all(); }
+  catch (error) { if (!String(error).includes('injected recovery failure')) throw error; recoveryFailed = true; }
+  check(recoveryFailed, 'recovery failure injection did not fail');
+  const rolledBack = await db.prepare("SELECT owner,lease_id,generation,expires <= unixepoch('now') AS expired FROM worlds WHERE id=?1").bind('recovery-rollback').first();
+  check(rolledBack.owner === 'owner' && rolledBack.lease_id === 'lease' && rolledBack.generation === 0 && rolledBack.expired === 1,
+    'failed recovery partially changed the world');
+  check(!(await db.prepare(commitStatus).bind('recovery-rollback', 'rollback-op').first()), 'failed recovery left a commit receipt');
+  await db.prepare('DROP TRIGGER reject_test_recovery').run();
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('world').run();
   for (const [owner, lease, duration] of [['', 'lease', 30], ['owner', '', 30], ['owner', 'lease', 1.5], ['owner', 'lease', 301]]) {
     check((await db.prepare(acquire).bind('world', owner, lease, duration).all()).results.length === 0, 'invalid acquisition succeeded');
@@ -117,11 +149,29 @@ try {
   const tokenHash = Array.from(new Uint8Array(tokenBytes), b => b.toString(16).padStart(2, '0')).join('');
   let objectVerified = false;
   const service = createLeaseService({ acquire, renew, acquireStatus, endpointUpdate, endpointStatus, endpointRevision,
-    commit, commitStatus, snapshotStatus, release, releaseStatus, abort, abortStatus, hostStatus, cancelAcquisition, cancelAcquisitionStatus, history }, async () => objectVerified);
+    commit, commitStatus, snapshotStatus, release, releaseStatus, abort, abortStatus, hostStatus, cancelAcquisition, cancelAcquisitionStatus, history, recoverStopped }, async () => objectVerified);
   const env = { DB: db, MEMBERS: [{ world: 'api-world', owner: 'api-owner', tokenHash }], WORLDS: [{ id: 'api-world', folder: 'folder' }] };
   const request = (route, body, credential = token) => service.fetch(new Request(`https://example.invalid/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
   }), env);
+  await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('api-recovery-world').run();
+  env.MEMBERS.push({ world: 'api-recovery-world', owner: 'api-owner', tokenHash });
+  env.WORLDS.push({ id: 'api-recovery-world', folder: 'folder' });
+  const stoppedGrant = await db.prepare(acquire).bind('api-recovery-world', 'api-owner', 'stopped-lease', 120).first();
+  const stoppedRequest = { world: 'api-recovery-world', lease: 'stopped-lease', epoch: stoppedGrant.epoch,
+    operation: 'stopped-operation', previousGeneration: 0, digest: 'a'.repeat(64), fileId: 'object-id', size: 42, driveToken: 'token' };
+  objectVerified = true;
+  check((await request('recover-stopped', stoppedRequest)).status === 409, 'active lease accepted for recovery');
+  await db.prepare("UPDATE worlds SET expires=unixepoch('now') WHERE id=?1").bind('api-recovery-world').run();
+  check((await request('recover-stopped', stoppedRequest, 'b'.repeat(43))).status === 401, 'unauthorized recovery accepted');
+  objectVerified = false;
+  check((await request('recover-stopped', stoppedRequest)).status === 422, 'unverified object accepted');
+  objectVerified = true;
+  check((await request('recover-stopped', stoppedRequest)).status === 200, 'stopped recovery failed');
+  check((await request('recover-stopped', stoppedRequest)).status === 200, 'lost recovery response could not be retried');
+  check((await request('recover-stopped', { ...stoppedRequest, digest: 'b'.repeat(64) })).status === 409, 'recovery operation reused with different data');
+  check((await request('release-status', { ...stoppedRequest, resultGeneration: 1 })).status === 200, 'recovery release receipt missing');
+  objectVerified = false;
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('cancel-world').run();
   env.MEMBERS.push({ world: 'cancel-world', owner: 'api-owner', tokenHash });
   const cancelled = { world: 'cancel-world', lease: 'cancel-first', duration: 120 };

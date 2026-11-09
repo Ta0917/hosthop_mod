@@ -11,6 +11,7 @@ const { Miniflare, convertV4MiniflareOptions } = require(resolve(process.argv[2]
 const here = dirname(fileURLToPath(import.meta.url));
 const load = name => readFileSync(join(here, name), 'utf8');
 const schema = load('schema.sql').replace(/^--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
+const migration = load('recover_stopped_migration.sql').replace(/^\s*--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
 const token = 'a'.repeat(43);
 const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))),
   value => value.toString(16).padStart(2, '0')).join('');
@@ -31,10 +32,12 @@ const mf = new Miniflare(convertV4MiniflareOptions({
 }));
 const db = await mf.getD1Database('DB');
 await db.batch(schema.map(statement => db.prepare(statement)));
+await db.batch(migration.map(statement => db.prepare(statement)));
 await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('world').run();
 let dropFirstAcquisitionReply = !process.env.HOSTHOP_TEST_NO_DROPS;
 let dropFirstCommitReply = !process.env.HOSTHOP_TEST_NO_DROPS;
 let dropFirstReleaseReply = !process.env.HOSTHOP_TEST_NO_DROPS;
+let dropFirstRecoveryReply = !process.env.HOSTHOP_TEST_NO_DROPS;
 const server = https.createServer({ pfx: readFileSync(process.argv[3]), passphrase: 'test-password' }, async (req, res) => {
   try {
     const chunks = [];
@@ -68,6 +71,11 @@ const server = https.createServer({ pfx: readFileSync(process.argv[3]), passphra
     }
     if (dropFirstReleaseReply && req.url === '/release' && response.status === 200) {
       dropFirstReleaseReply = false;
+      req.socket.destroy();
+      return;
+    }
+    if (dropFirstRecoveryReply && req.url === '/recover-stopped' && response.status === 200) {
+      dropFirstRecoveryReply = false;
       req.socket.destroy();
       return;
     }
