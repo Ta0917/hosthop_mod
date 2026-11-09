@@ -18,6 +18,9 @@ public final class SaveStatusTest {
         if (!SaveStatus.RECOVERY.equals(SaveStatus.read(config))) throw new AssertionError("abandoned save not flagged");
         SaveStatus.write(config, SaveStatus.SAVED);
         if (!SaveStatus.SAVED.equals(SaveStatus.read(config))) throw new AssertionError("completion not retained");
+        Files.writeString(config.resolve("pending-host.dat"), "newer session");
+        if (!SaveStatus.RECOVERY.equals(SaveStatus.read(config))) throw new AssertionError("older completion masked pending host");
+        Files.delete(config.resolve("pending-host.dat"));
         try { SaveStatus.write(config, "untrusted-value"); throw new AssertionError("invalid status accepted"); }
         catch (IOException expected) { }
         if (!SaveStatus.SAVED.equals(SaveStatus.read(config))) throw new AssertionError("status was overwritten");

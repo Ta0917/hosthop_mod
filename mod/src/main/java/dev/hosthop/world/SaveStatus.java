@@ -34,10 +34,13 @@ public final class SaveStatus {
 
     public static String read(Path config) throws IOException {
         Path status = config.resolve("save-status.txt");
-        if (!Files.isRegularFile(status, LinkOption.NOFOLLOW_LINKS)) return null;
+        boolean pending = Files.exists(config.resolve("pending-host.dat"), LinkOption.NOFOLLOW_LINKS);
+        if (!Files.isRegularFile(status, LinkOption.NOFOLLOW_LINKS)) return pending ? RECOVERY : null;
         if (Files.size(status) > 256) throw new IOException("Invalid save status");
         String value = Files.readString(status, StandardCharsets.UTF_8);
         if (!ALLOWED.contains(value)) throw new IOException("Invalid save status");
+        // A completion from an earlier session cannot describe a newer pending host.
+        if (SAVED.equals(value) && pending) return RECOVERY;
         if (!SAVING.equals(value)) return value;
         // A stale saving marker must not be shown as a successful or ongoing save.
         Path runtime = config.resolve("runtime.lock");
