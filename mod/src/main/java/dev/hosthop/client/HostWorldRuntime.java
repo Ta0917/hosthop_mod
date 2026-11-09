@@ -17,6 +17,7 @@ import dev.hosthop.world.SaveFailureMonitor;
 import dev.hosthop.world.PendingHostRecovery;
 import dev.hosthop.world.ServerStopSignal;
 import dev.hosthop.world.SharedWorldTransfer;
+import dev.hosthop.world.HostPlayerIdentity;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
@@ -166,6 +167,8 @@ public final class HostWorldRuntime {
             if (cancelled.get()) { abortBeforeStart(); return; }
             transfer.prepare(acquisition, initial, sessionDir.resolve("initial.zip"), worldPath, token.accessToken());
             if (cancelled.get()) { abortBeforeStart(); return; }
+            stage = "preparing host player identity";
+            HostPlayerIdentity.prepare(worldPath);
             pending.save(pendingData("starting", id, levelId));
             stage = "starting Minecraft";
             monitor = new SaveFailureMonitor();
