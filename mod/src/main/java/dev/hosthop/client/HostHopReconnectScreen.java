@@ -13,15 +13,17 @@ import net.minecraft.network.chat.Component;
 
 /** A cancellable waiting screen that follows the current authenticated host. */
 public final class HostHopReconnectScreen extends Screen {
-    private static final long MAX_WAIT = TimeUnit.MINUTES.toNanos(5);
+    // Large worlds can take several minutes to upload before a new host starts.
+    private static final long MAX_WAIT = TimeUnit.MINUTES.toNanos(30);
     private final GuestReconnect reconnect;
-    private final long started = System.nanoTime();
+    private final long started;
     private int ticks;
     private boolean checking;
 
     HostHopReconnectScreen(GuestReconnect reconnect) {
         super(Component.translatable("screen.hosthop.reconnecting"));
         this.reconnect = reconnect;
+        this.started = reconnect.waitStarted();
     }
 
     @Override protected void init() {
@@ -32,7 +34,8 @@ public final class HostHopReconnectScreen extends Screen {
     @Override public void tick() {
         if (!GuestReconnect.active(reconnect)) return;
         if (System.nanoTime() - started > MAX_WAIT) { onClose(); return; }
-        if (checking || ++ticks < 40) return;
+        int interval = System.nanoTime() - started < TimeUnit.MINUTES.toNanos(5) ? 40 : 200;
+        if (checking || ++ticks < interval) return;
         ticks = 0; checking = true;
         CompletableFuture.supplyAsync(() -> {
             try { return reconnect.authority.hostStatus(reconnect.invitation.world(), 2).endpoint(); }

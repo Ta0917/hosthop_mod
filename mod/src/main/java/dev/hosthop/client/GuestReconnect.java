@@ -32,6 +32,7 @@ public final class GuestReconnect {
     long minimumEpoch;
     private Connection connection;
     private boolean loggedOut, reconnecting;
+    private long waitStarted;
 
     private GuestReconnect(Invitation invitation, LeaseAuthorityClient authority, LeaseAuthorityClient.Endpoint endpoint, Screen parent) {
         this.invitation = invitation; this.authority = authority; this.parent = parent;
@@ -42,6 +43,7 @@ public final class GuestReconnect {
         current = new GuestReconnect(invitation, authority, endpoint, parent);
     }
     static boolean active(GuestReconnect value) { return value != null && current == value; }
+    long waitStarted() { return waitStarted; }
     void connecting(LeaseAuthorityClient.Endpoint endpoint, ReconnectController.Attempt attempt) {
         address = endpoint.address(); epoch = endpoint.epoch(); this.attempt = attempt; reconnecting = true;
     }
@@ -55,6 +57,7 @@ public final class GuestReconnect {
         value.connection = event.getConnection(); value.loggedOut = false;
         if (value.reconnecting && !value.controller.connected(value.session, value.attempt)) { value.cancel(); return; }
         value.reconnecting = false; value.attempt = null;
+        value.waitStarted = 0;
     }
 
     @SubscribeEvent public static void logout(ClientPlayerNetworkEvent.LoggingOut event) {
@@ -79,6 +82,7 @@ public final class GuestReconnect {
             if (!value.controller.failed(value.session, value.attempt, ReconnectController.Failure.TRANSIENT, System.nanoTime())
                     || value.controller.state() == ReconnectController.State.STOPPED) { value.cancel(); return; }
         } else {
+            value.waitStarted = System.nanoTime();
             value.controller = new ReconnectController();
             value.session = value.controller.start(value.invitation.world(), value.epoch, System.nanoTime());
             value.minimumEpoch = "multiplayer.disconnect.server_shutdown".equals(reason.getKey()) && value.epoch < Long.MAX_VALUE
