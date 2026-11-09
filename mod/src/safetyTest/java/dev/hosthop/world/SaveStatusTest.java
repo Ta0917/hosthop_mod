@@ -21,6 +21,12 @@ public final class SaveStatusTest {
         try (var channel = FileChannel.open(config.resolve("runtime.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              var lock = channel.lock()) {
             if (!SaveStatus.SAVING.equals(SaveStatus.read(config))) throw new AssertionError("active save not shown");
+            if (SaveStatus.readProgress(config) != -1) throw new AssertionError("unstarted transfer has progress");
+            SaveStatus.writeProgress(config, 42);
+            if (!SaveStatus.SAVING.equals(SaveStatus.read(config)) || SaveStatus.readProgress(config) != 42)
+                throw new AssertionError("active progress not retained");
+            SaveStatus.writeProgress(config, 100);
+            if (SaveStatus.readProgress(config) != 100) throw new AssertionError("transfer completion not retained");
         }
         if (!SaveStatus.RECOVERY.equals(SaveStatus.read(config))) throw new AssertionError("abandoned save not flagged");
         String executable = System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win") ? "java.exe" : "java";
@@ -32,10 +38,12 @@ public final class SaveStatusTest {
                 try { return child.inputReader().readLine(); } catch (IOException error) { throw new RuntimeException(error); }
             }).get(10, java.util.concurrent.TimeUnit.SECONDS);
             if (!"LOCKED".equals(line) || !SaveStatus.SAVING.equals(SaveStatus.read(config))) throw new AssertionError("other process not detected");
+            SaveStatus.writeProgress(config, 73);
+            if (SaveStatus.readProgress(config) != 73) throw new AssertionError("other process progress not shown");
         } finally { child.getOutputStream().close(); if (!child.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) child.destroyForcibly(); }
         if (!SaveStatus.RECOVERY.equals(SaveStatus.read(config))) throw new AssertionError("stopped process not detected");
         SaveStatus.write(config, SaveStatus.SAVED);
-        if (!SaveStatus.SAVED.equals(SaveStatus.read(config))) throw new AssertionError("completion not retained");
+        if (!SaveStatus.SAVED.equals(SaveStatus.read(config)) || SaveStatus.readProgress(config) != -1) throw new AssertionError("completion not retained");
         Files.writeString(config.resolve("pending-host.dat"), "newer session");
         if (!SaveStatus.RECOVERY.equals(SaveStatus.read(config))) throw new AssertionError("older completion masked pending host");
         Files.delete(config.resolve("pending-host.dat"));

@@ -91,7 +91,12 @@ public final class HostWorldRuntime {
         this.authority = authority;
         coordinator = new LeaseCoordinator(gate, authority, System::nanoTime, System::currentTimeMillis);
         transfer = new SharedWorldTransfer(gate, authority, storage, System::nanoTime, System::currentTimeMillis,
-                percent -> uploadPercent = (int) percent, percent -> downloadPercent = (int) percent);
+                percent -> {
+                    if (uploadPercent == (int) percent) return;
+                    uploadPercent = (int) percent;
+                    try { dev.hosthop.world.SaveStatus.writeProgress(net.neoforged.fml.loading.FMLPaths.CONFIGDIR.get().resolve("hosthop"), (int) percent); }
+                    catch (IOException failure) { com.mojang.logging.LogUtils.getLogger().warn("HostHop could not persist upload progress"); }
+                }, percent -> downloadPercent = (int) percent);
     }
 
     public static boolean start(Invitation invitation, DriveCredentialManager credentials, String initialName, Consumer<String> status) {

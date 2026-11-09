@@ -36,6 +36,7 @@ public final class HostHopScreen extends Screen {
     private boolean watchingSave;
     private boolean watchingExternalSave;
     private int externalStatusTicks;
+    private int externalUploadPercent = -1;
     private volatile DriveCredentialManager activeAuthorization;
 
     public HostHopScreen(Screen parent) { super(Component.translatable("screen.hosthop.title")); this.parent = parent; }
@@ -104,7 +105,7 @@ public final class HostHopScreen extends Screen {
                 if (!"screen.hosthop.saving_world".equals(savedStatus)) {
                     watchingExternalSave = false;
                     busy(false, savedStatus == null ? "screen.hosthop.recovery_required" : savedStatus);
-                }
+                } else externalUploadPercent = dev.hosthop.world.SaveStatus.readProgress(secretPath().getParent());
             } catch (IOException failure) {
                 watchingExternalSave = false;
                 busy(false, "screen.hosthop.recovery_required");
@@ -257,6 +258,9 @@ public final class HostHopScreen extends Screen {
         graphics.text(font, Component.translatable("screen.hosthop.version", version), 4, 4, -1);
         graphics.centeredText(font, title, width / 2, height / 2 - 117, -1);
         var saving = HostWorldRuntime.lastStatus().equals("screen.hosthop.saving_world") ? HostHopStatusOverlay.message() : null;
+        if (watchingExternalSave && externalUploadPercent >= 0)
+            saving = externalUploadPercent >= 100 ? Component.translatable("screen.hosthop.upload_confirming")
+                    : Component.translatable("screen.hosthop.uploading", externalUploadPercent);
         if (HostWorldRuntime.active() && HostWorldRuntime.lastStatus().equals("screen.hosthop.preparing") && HostWorldRuntime.downloadPercent() >= 0) {
             int percent = HostWorldRuntime.downloadPercent();
             saving = percent >= 100 ? Component.translatable("screen.hosthop.download_preparing")

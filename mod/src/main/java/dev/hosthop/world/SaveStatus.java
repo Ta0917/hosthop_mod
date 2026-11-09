@@ -21,7 +21,18 @@ public final class SaveStatus {
     private SaveStatus() {}
 
     public static void write(Path config, String value) throws IOException {
-        if (!ALLOWED.contains(value) || Files.isSymbolicLink(config) || !Files.isDirectory(config, LinkOption.NOFOLLOW_LINKS))
+        if (!ALLOWED.contains(value)) throw new IOException("Invalid save status");
+        writeContent(config, value);
+    }
+
+    /** Progress is advisory; the saved status still changes only after publication and release. */
+    public static void writeProgress(Path config, int percent) throws IOException {
+        if (percent < 0 || percent > 100) throw new IOException("Invalid save progress");
+        writeContent(config, SAVING + "\n" + percent);
+    }
+
+    private static void writeContent(Path config, String value) throws IOException {
+        if (Files.isSymbolicLink(config) || !Files.isDirectory(config, LinkOption.NOFOLLOW_LINKS))
             throw new IOException("Invalid save status");
         Path target = config.resolve("save-status.txt");
         if (Files.isSymbolicLink(target)) throw new IOException("Invalid save status path");
@@ -38,6 +49,12 @@ public final class SaveStatus {
         if (!Files.isRegularFile(status, LinkOption.NOFOLLOW_LINKS)) return pending ? RECOVERY : null;
         if (Files.size(status) > 256) throw new IOException("Invalid save status");
         String value = Files.readString(status, StandardCharsets.UTF_8);
+        int newline = value.indexOf('\n');
+        if (newline >= 0) {
+            String progress = value.substring(newline + 1);
+            value = value.substring(0, newline);
+            if (!SAVING.equals(value) || !progress.matches("0|[1-9][0-9]?|100")) throw new IOException("Invalid save progress");
+        }
         if (!ALLOWED.contains(value)) throw new IOException("Invalid save status");
         // A completion from an earlier session cannot describe a newer pending host.
         if (SAVED.equals(value) && pending) return RECOVERY;
@@ -49,5 +66,16 @@ public final class SaveStatus {
             try (var lock = channel.tryLock()) { return lock == null ? SAVING : RECOVERY; }
             catch (OverlappingFileLockException inUse) { return SAVING; }
         }
+    }
+
+    public static int readProgress(Path config) throws IOException {
+        if (!SAVING.equals(read(config))) return -1;
+        Path status = config.resolve("save-status.txt");
+        String value = Files.readString(status, StandardCharsets.UTF_8);
+        int newline = value.indexOf('\n');
+        if (newline < 0) return -1;
+        String progress = value.substring(newline + 1);
+        if (!value.substring(0, newline).equals(SAVING) || !progress.matches("0|[1-9][0-9]?|100")) return -1;
+        return Integer.parseInt(progress);
     }
 }
