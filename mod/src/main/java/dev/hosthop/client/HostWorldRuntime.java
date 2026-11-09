@@ -330,7 +330,8 @@ public final class HostWorldRuntime {
 
     private void finish(MinecraftServer candidate) {
         if (candidate != server || !finishing.compareAndSet(false, true)) return;
-        worker.execute(() -> {
+        var keepAlive = new dev.hosthop.world.SaveKeepAlive();
+        try { worker.execute(() -> {
             String shutdownStage = "server stop verification";
             try {
                 candidate.getRunningThread().join(30_000);
@@ -367,8 +368,11 @@ public final class HostWorldRuntime {
                 com.mojang.logging.LogUtils.getLogger().warn("HostHop shutdown failed during {} ({})", shutdownStage, failure.getClass().getSimpleName());
                 tell(failure instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace ? "screen.hosthop.disk_recovery"
                         : failure instanceof dev.hosthop.storage.GoogleDriveSnapshotStore.QuotaExceeded ? "screen.hosthop.drive_recovery" : "screen.hosthop.recovery_required");
-            } finally { cleanup(); }
-        });
+            } finally { try { cleanup(); } finally { keepAlive.close(); } }
+        }); } catch (RuntimeException rejected) {
+            keepAlive.close();
+            throw rejected;
+        }
     }
 
     private void tell(String key) {
