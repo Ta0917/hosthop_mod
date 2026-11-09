@@ -29,6 +29,8 @@ public final class BackgroundExitSmoke {
             try {
                 renderThread.join(30000);
                 if (renderThread.isAlive()) throw new IllegalStateException("Client main thread did not exit");
+                // Vanilla's post-main watchdog would kill the JVM after 15 seconds.
+                Thread.sleep(17000);
                 var archive = dir.resolve("snapshot.zip");
                 SnapshotWriter.create(world, archive);
                 SnapshotVerifier.verify(archive);
