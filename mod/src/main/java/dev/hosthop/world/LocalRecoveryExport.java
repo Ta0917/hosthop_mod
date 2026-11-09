@@ -19,6 +19,31 @@ public final class LocalRecoveryExport {
     private LocalRecoveryExport() {}
     public record Exported(String name, boolean clean) {}
 
+    /** Persist the user's explicit decision only after checking both local locks. */
+    public static void confirmUnclean(Path gameDirectory, Path configDirectory, Invitation invitation) throws IOException {
+        if (gameDirectory == null || configDirectory == null || invitation == null) throw new IOException("Invalid recovery request");
+        Path config = configDirectory.toAbsolutePath().normalize();
+        if (Files.isSymbolicLink(config) || !Files.isDirectory(config, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Invalid recovery configuration");
+        try (var channel = FileChannel.open(config.resolve("runtime.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+            java.nio.channels.FileLock lock;
+            try { lock = channel.tryLock(); }
+            catch (OverlappingFileLockException busy) { throw new IOException("HostHop is already running", busy); }
+            if (lock == null) throw new IOException("HostHop is already running");
+            try (lock) {
+                var pending = new WindowsSecretStore(config.resolve("pending-host.dat"));
+                var evidence = pending.load();
+                if (!"starting".equals(evidence.get("stage"))) throw new IOException("No unclean session to confirm");
+                var source = PendingHostRecovery.findForExport(evidence, invitation.world(), invitation.principal(), gameDirectory);
+                if (source == null) throw new IOException("No recoverable local session");
+                try (var worldLock = StoppedWorldLock.acquire(source.world())) {
+                    var updated = new java.util.HashMap<>(evidence);
+                    updated.put("stage", "unclean-confirmed");
+                    pending.save(updated);
+                }
+            }
+        }
+    }
+
     public static Exported export(Path gameDirectory, Path configDirectory, Invitation invitation) throws IOException {
         if (gameDirectory == null || configDirectory == null || invitation == null) throw new IOException("Invalid recovery request");
         Path config = configDirectory.toAbsolutePath().normalize();

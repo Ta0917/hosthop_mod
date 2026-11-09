@@ -243,7 +243,8 @@ public final class HostWorldRuntime {
         if (candidate == null) return false;
         try (var lock = dev.hosthop.snapshot.StoppedWorldLock.acquire(candidate.world())) {
             var recovery = gate.beginRecovery(candidate.record());
-            transfer.recoverStopped(recovery, candidate.journal(), true, driveToken, invitation.folder(), "stopped".equals(evidence.get("stage")));
+            transfer.recoverStopped(recovery, candidate.journal(), true, driveToken, invitation.folder(),
+                    "stopped".equals(evidence.get("stage")) || "unclean-confirmed".equals(evidence.get("stage")));
             Files.delete(pendingPath);
             Files.delete(candidate.journal());
         }
@@ -253,6 +254,7 @@ public final class HostWorldRuntime {
     /** Retry an interrupted snapshot only while its original lease is still active. */
     private boolean recoverStoppedHost(Map<String, String> evidence, String driveToken) throws IOException, InterruptedException {
         var stopped = PendingHostRecovery.findStopped(evidence, invitation.world(), invitation.principal(), minecraft.gameDirectory.toPath());
+        if (stopped == null) stopped = PendingHostRecovery.findConfirmedUnclean(evidence, invitation.world(), invitation.principal(), minecraft.gameDirectory.toPath());
         if (stopped == null) return false;
         Path journal = stopped.session().resolve("publication.dat");
         // A journal may identify a commit already in flight; never replace it.

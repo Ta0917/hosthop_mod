@@ -95,9 +95,19 @@ public final class HostRuntimeSmoke {
                 minecraft.disconnect(new TitleScreen(), false);
                 stage = 4;
             } else if (stage == 4 && !HostWorldRuntime.active()) {
-                String expected = Boolean.getBoolean("hosthop.interruptedSmoke") || Boolean.getBoolean("hosthop.expiredRecoverySmoke")
+                String expected = Boolean.getBoolean("hosthop.interruptedSmoke") || Boolean.getBoolean("hosthop.expiredRecoverySmoke") || Boolean.getBoolean("hosthop.uncleanRecoverySmoke")
                         ? "screen.hosthop.recovery_required" : "screen.hosthop.saved_world";
                 if (!HostWorldRuntime.lastStatus().equals(expected)) throw new IllegalStateException("first save result unexpected: " + HostWorldRuntime.lastStatus());
+                if (Boolean.getBoolean("hosthop.uncleanRecoverySmoke")) {
+                    Path config = minecraft.gameDirectory.toPath().resolve("config/hosthop");
+                    var pending = new WindowsSecretStore(config.resolve("pending-host.dat"));
+                    var evidence = new java.util.HashMap<>(pending.load());
+                    evidence.put("stage", "starting");
+                    pending.save(evidence);
+                    if (dev.hosthop.world.PendingHostRecovery.findStopped(evidence, "world", "owner", minecraft.gameDirectory.toPath()) != null)
+                        throw new IllegalStateException("unclean session accepted without confirmation");
+                    dev.hosthop.world.LocalRecoveryExport.confirmUnclean(minecraft.gameDirectory.toPath(), config, context.invitation());
+                }
                 if (Boolean.getBoolean("hosthop.verifyCloseSmoke")) {
                     Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-close-restore-result.txt"), "verified");
                     System.out.println("HOSTHOP_CLOSE_RESTORE_SMOKE world change restored=true");
@@ -138,12 +148,18 @@ public final class HostRuntimeSmoke {
                     Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-delta-host-result.txt"), "verified");
                 if (Boolean.getBoolean("hosthop.expiredRecoverySmoke"))
                     Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-expired-recovery-result.txt"), "verified");
+                if (Boolean.getBoolean("hosthop.uncleanRecoverySmoke"))
+                    Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-unclean-recovery-result.txt"), "verified");
                 System.out.println("HOSTHOP_HOST_SMOKE two integrated hosts restored world change=true");
                 finish(minecraft);
             } else if ((stage == 2 || stage == 5) && !HostWorldRuntime.active()) {
                 throw new IllegalStateException("host startup failed: " + HostWorldRuntime.lastStatus());
             }
         } catch (Throwable failure) {
+            if (Boolean.getBoolean("hosthop.uncleanRecoverySmoke")) {
+                try { Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-unclean-recovery-failure.txt"), failure.toString()); }
+                catch (Exception ignored) { }
+            }
             if (Boolean.getBoolean("hosthop.expiredRecoverySmoke")) {
                 try { Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-expired-recovery-failure.txt"), failure.toString()); }
                 catch (Exception ignored) { }
@@ -214,9 +230,9 @@ public final class HostRuntimeSmoke {
                 private final java.util.Map<String, Path> objects = new java.util.HashMap<>();
                 @Override public GoogleDriveSnapshotStore.ObjectRef upload(Path archive, String folder, String accessToken) throws java.io.IOException, InterruptedException {
                     if (Boolean.getBoolean("hosthop.closeHostSmoke")) Thread.sleep(17_000);
-                    if ((Boolean.getBoolean("hosthop.interruptedSmoke") || Boolean.getBoolean("hosthop.expiredRecoverySmoke")) && count == 0) {
+                    if ((Boolean.getBoolean("hosthop.interruptedSmoke") || Boolean.getBoolean("hosthop.expiredRecoverySmoke") || Boolean.getBoolean("hosthop.uncleanRecoverySmoke")) && count == 0) {
                         count++;
-                        if (Boolean.getBoolean("hosthop.expiredRecoverySmoke")) {
+                        if (Boolean.getBoolean("hosthop.expiredRecoverySmoke") || Boolean.getBoolean("hosthop.uncleanRecoverySmoke")) {
                             try { post(http, base, "/test-expire", "{}"); }
                             catch (InterruptedException interrupted) { throw interrupted; }
                             catch (Exception failure) { throw new java.io.IOException(failure); }

@@ -31,8 +31,15 @@ public final class PendingHostRecovery {
         return findLocal(evidence, worldId, principal, gameDirectory, true);
     }
 
+    /** Explicitly approved unclean data remains distinct from a verified orderly stop. */
+    public static Stopped findConfirmedUnclean(Map<String, String> evidence, String worldId, String principal, Path gameDirectory) throws IOException {
+        if (evidence == null || !"unclean-confirmed".equals(evidence.get("stage"))) return null;
+        return findLocal(evidence, worldId, principal, gameDirectory, true);
+    }
+
     private static Stopped findLocal(Map<String, String> evidence, String worldId, String principal, Path gameDirectory, boolean allowUnclean) throws IOException {
-        if (evidence == null || !("stopped".equals(evidence.get("stage")) || allowUnclean && "starting".equals(evidence.get("stage"))) || !worldId.equals(evidence.get("world"))
+        if (evidence == null || !("stopped".equals(evidence.get("stage")) || allowUnclean && ("starting".equals(evidence.get("stage"))
+                || "unclean-confirmed".equals(evidence.get("stage")))) || !worldId.equals(evidence.get("world"))
                 || !principal.equals(evidence.get("principal"))) return null;
         String id = evidence.get("lease"), level = evidence.get("level");
         long epoch, generation;
@@ -52,7 +59,8 @@ public final class PendingHostRecovery {
 
     /** Validate local evidence before attempting an authenticated release. */
     public static Committed findCommitted(Map<String, String> evidence, String worldId, String principal, Path gameDirectory) throws IOException {
-        if (evidence == null || !("starting".equals(evidence.get("stage")) || "stopped".equals(evidence.get("stage"))) || !worldId.equals(evidence.get("world"))
+        if (evidence == null || !("starting".equals(evidence.get("stage")) || "stopped".equals(evidence.get("stage"))
+                || "unclean-confirmed".equals(evidence.get("stage"))) || !worldId.equals(evidence.get("world"))
                 || !principal.equals(evidence.get("principal"))) return null;
         String id = evidence.get("lease"), level = evidence.get("level");
         long epoch, generation;

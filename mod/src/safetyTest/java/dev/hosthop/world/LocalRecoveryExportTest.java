@@ -49,6 +49,20 @@ public final class LocalRecoveryExportTest {
                 || !vault.load().equals(unsafe)) throw new AssertionError("unclean recovery was not preserved separately");
         if (PendingHostRecovery.findStopped(unsafe, "world", "owner", game) != null)
             throw new AssertionError("unclean world accepted for automatic publication");
+        try (var channel = FileChannel.open(world.resolve("session.lock"), StandardOpenOption.WRITE);
+             var lock = channel.lock()) {
+            try { LocalRecoveryExport.confirmUnclean(game, config, invite); throw new AssertionError("active world confirmed"); }
+            catch (IOException expected) { }
+        }
+        if (!vault.load().equals(unsafe)) throw new AssertionError("busy confirmation changed evidence");
+        LocalRecoveryExport.confirmUnclean(game, config, invite);
+        var confirmed = vault.load();
+        if (!"unclean-confirmed".equals(confirmed.get("stage"))
+                || PendingHostRecovery.findStopped(confirmed, "world", "owner", game) != null
+                || PendingHostRecovery.findConfirmedUnclean(confirmed, "world", "owner", game) == null)
+            throw new AssertionError("explicit recovery decision was not retained");
+        try { LocalRecoveryExport.confirmUnclean(game, config, invite); throw new AssertionError("confirmation accepted twice"); }
+        catch (IOException expected) { }
         System.out.println("Local recovery export checks passed");
     }
 }

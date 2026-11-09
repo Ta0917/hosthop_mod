@@ -18,6 +18,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.ConfirmScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.multiplayer.resolver.ServerAddress;
@@ -30,7 +31,7 @@ public final class HostHopScreen extends Screen {
     private final Screen parent;
     private final AtomicLong request = new AtomicLong();
     private Component status = Component.translatable("screen.hosthop.initial");
-    private Button register, authorize, authorizeSnapshot, join, history, exportRecovery;
+    private Button register, authorize, authorizeSnapshot, join, history, exportRecovery, recoverUnclean;
     private EditBox initialWorld;
     private boolean startedHere;
     private boolean watchingSave;
@@ -57,7 +58,9 @@ public final class HostHopScreen extends Screen {
         history = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.history"), button -> Minecraft.getInstance().gui.setScreen(new HostHopHistoryScreen(this)))
                 .bounds(x + 134, height / 2 + 34, 76, 20).build());
         exportRecovery = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.export_recovery"), button -> exportRecovery())
-                .bounds(x, height / 2 + 60, 210, 20).build());
+                .bounds(x, height / 2 + 60, 103, 20).build());
+        recoverUnclean = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.recover_unclean"), button -> confirmUncleanRecovery())
+                .bounds(x + 107, height / 2 + 60, 103, 20).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
                 .bounds(x, height / 2 + 86, 210, 20).build());
         String currentStatus = HostWorldRuntime.lastStatus();
@@ -90,6 +93,25 @@ public final class HostHopScreen extends Screen {
                 });
             } catch (Exception failure) { finish(id, "screen.hosthop.export_recovery_failed"); }
         });
+    }
+
+    private void confirmUncleanRecovery() {
+        var minecraft = Minecraft.getInstance();
+        minecraft.gui.setScreen(new ConfirmScreen(accepted -> {
+            minecraft.gui.setScreen(this);
+            if (!accepted) return;
+            long id = request.incrementAndGet();
+            busy(true, "screen.hosthop.confirming_recovery");
+            CompletableFuture.runAsync(() -> {
+                try {
+                    var invite = Invitation.fromSecrets(new WindowsSecretStore(secretPath()).load());
+                    dev.hosthop.world.LocalRecoveryExport.confirmUnclean(minecraft.gameDirectory.toPath(), secretPath().getParent(), invite);
+                    minecraft.execute(() -> {
+                        if (id == request.get() && minecraft.gui.screen() == this) joinHost();
+                    });
+                } catch (Exception failure) { finish(id, "screen.hosthop.confirm_recovery_failed"); }
+            });
+        }, Component.translatable("screen.hosthop.confirm_recovery_title"), Component.translatable("screen.hosthop.confirm_recovery_warning")));
     }
 
     @Override public void tick() {
@@ -205,14 +227,16 @@ public final class HostHopScreen extends Screen {
                 var invitation = Invitation.fromSecrets(new WindowsSecretStore(secretPath()).load());
                 var authority = new LeaseAuthorityClient(URI.create(invitation.authority()), invitation.memberToken());
                 var host = authority.hostStatus(invitation.world(), 2);
+                Path pending = secretPath().getParent().resolve("pending-host.dat");
+                boolean confirmedUnclean = Files.exists(pending) && "unclean-confirmed".equals(new WindowsSecretStore(pending).load().get("stage"));
                 Minecraft minecraft = Minecraft.getInstance();
                 minecraft.execute(() -> {
                     if (id != request.get() || minecraft.gui.screen() != this) return;
                     // A previous local pre-launch attempt may still own the lease.
                     // Let the runtime inspect its protected journal before treating
                     // an unpublished host as an indefinitely running remote host.
-                    boolean localPending = Files.exists(secretPath().getParent().resolve("pending-host.dat"));
-                    if (!host.held() || (host.endpoint() == null && localPending)) {
+                    boolean localPending = Files.exists(pending);
+                    if (!host.held() || confirmedUnclean || (host.endpoint() == null && localPending)) {
                         var vault = new WindowsSecretStore(secretPath());
                         var authorization = new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret());
                         var credentials = new DriveCredentialManager(vault, authorization);
@@ -241,7 +265,7 @@ public final class HostHopScreen extends Screen {
             if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(false, message);
         });
     }
-    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; exportRecovery.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
+    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; exportRecovery.active = !value; recoverUnclean.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
 
     @Override public void onClose() {
         request.incrementAndGet();

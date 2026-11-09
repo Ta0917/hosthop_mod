@@ -91,6 +91,10 @@ neoForge {
                     systemProperty 'hosthop.expiredRecoverySmoke', 'true'
                     systemProperty 'hosthop.fakeRelaySmoke', 'true'
                 }
+                if (project.hasProperty('hosthopUncleanRecoverySmoke')) {
+                    systemProperty 'hosthop.uncleanRecoverySmoke', 'true'
+                    systemProperty 'hosthop.fakeRelaySmoke', 'true'
+                }
                 if (project.hasProperty('hosthopRealSmoke')) {
                     systemProperty 'hosthop.realSmoke', 'true'
                     systemProperty 'hosthop.realInvite', project.hasProperty('hosthopRealInvitation')
