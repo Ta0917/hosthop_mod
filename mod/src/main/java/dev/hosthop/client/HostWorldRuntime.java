@@ -55,6 +55,7 @@ import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 public final class HostWorldRuntime {
     private static final AtomicReference<HostWorldRuntime> ACTIVE = new AtomicReference<>();
     private static volatile String lastStatus = "screen.hosthop.initial";
+    private static volatile int uploadPercent = -1;
     private final Invitation invitation;
     private final DriveCredentialManager credentials;
     private final String initialName;
@@ -85,7 +86,8 @@ public final class HostWorldRuntime {
         this.invitation = invitation; this.credentials = credentials; this.initialName = initialName; this.status = status;
         this.authority = authority;
         coordinator = new LeaseCoordinator(gate, authority, System::nanoTime, System::currentTimeMillis);
-        transfer = new SharedWorldTransfer(gate, authority, storage, System::nanoTime, System::currentTimeMillis);
+        transfer = new SharedWorldTransfer(gate, authority, storage, System::nanoTime, System::currentTimeMillis,
+                percent -> uploadPercent = (int) percent);
     }
 
     public static boolean start(Invitation invitation, DriveCredentialManager credentials, String initialName, Consumer<String> status) {
@@ -96,12 +98,14 @@ public final class HostWorldRuntime {
                                   Consumer<String> status, SnapshotStore storage, LeaseAuthorityClient authority) {
         var runtime = new HostWorldRuntime(invitation, credentials, initialName, status, storage, authority);
         if (!ACTIVE.compareAndSet(null, runtime)) { runtime.shutdownExecutors(); return false; }
+        uploadPercent = -1;
         runtime.worker.execute(runtime::prepare);
         return true;
     }
     public static boolean active() { return ACTIVE.get() != null; }
     public static boolean hostingReady() { var runtime = ACTIVE.get(); return runtime != null && runtime.relayReady && !runtime.failed.get(); }
     public static String lastStatus() { return lastStatus; }
+    public static int uploadPercent() { return uploadPercent; }
     public static void cancelPreparing() { var runtime = ACTIVE.get(); if (runtime != null && !runtime.launchRequested) runtime.cancelled.set(true); }
 
     private void prepare() {

@@ -38,7 +38,9 @@ public final class GoogleDriveSnapshotStoreTest {
                 check(index == 3 && request.headers().firstValue("Content-Range").orElseThrow().equals("bytes 8388608-" + (size - 1) + "/" + size));
                 return reply(200, Map.of(), "{\"id\":\"file-id\",\"name\":\"" + hash + ".zip\",\"size\":\"" + size + "\",\"sha256Checksum\":\"" + hash + "\",\"parents\":[\"folder\"],\"trashed\":false}");
             });
-            var uploaded = store.upload(archive, "folder", "test-token");
+            var progress = new java.util.ArrayList<Long>();
+            var uploaded = store.upload(archive, "folder", "test-token", progress::add);
+            check(progress.size() == 3 && progress.get(0) == 0 && progress.get(1) > 0 && progress.get(1) < 100 && progress.get(2) == 100);
             check(calls.get() == 4 && uploaded.fileId().equals("file-id") && uploaded.sha256().equals(hash) && uploaded.size() == size);
             var blockedCalls = new AtomicInteger();
             var full = new GoogleDriveSnapshotStore(request -> {

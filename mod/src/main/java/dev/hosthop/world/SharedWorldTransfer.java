@@ -23,12 +23,20 @@ public final class SharedWorldTransfer {
     private final LeaseAuthorityClient authority;
     private final SnapshotStore storage;
     private final LongSupplier nanos, millis;
+    private final java.util.function.LongConsumer uploadProgress;
 
     public SharedWorldTransfer(LocalHostGate gate, LeaseAuthorityClient authority, SnapshotStore storage,
                                LongSupplier nanos, LongSupplier millis) {
+        this(gate, authority, storage, nanos, millis, ignored -> {});
+    }
+
+    public SharedWorldTransfer(LocalHostGate gate, LeaseAuthorityClient authority, SnapshotStore storage,
+                               LongSupplier nanos, LongSupplier millis, java.util.function.LongConsumer uploadProgress) {
         if (gate == null || authority == null || storage == null || nanos == null || millis == null)
             throw new IllegalArgumentException("Missing shared-world input");
+        if (uploadProgress == null) throw new IllegalArgumentException("Missing progress callback");
         this.gate = gate; this.authority = authority; this.storage = storage; this.nanos = nanos; this.millis = millis;
+        this.uploadProgress = uploadProgress;
     }
 
     /** Restores to a new world directory; generation zero imports a stopped local copy. */
@@ -82,7 +90,7 @@ public final class SharedWorldTransfer {
             throw new IOException("Server stop was not accepted");
         try (var lock = StoppedWorldLock.acquire(stoppedWorld)) { SnapshotWriter.create(stoppedWorld, archive); }
         GoogleDriveSnapshotStore.ObjectRef object;
-        try { object = storage.upload(archive, folderId, driveToken); }
+        try { object = storage.upload(archive, folderId, driveToken, uploadProgress); }
         catch (IOException | InterruptedException failure) {
             com.mojang.logging.LogUtils.getLogger().warn("HostHop snapshot upload failed ({})", failure.getClass().getSimpleName());
             throw failure;

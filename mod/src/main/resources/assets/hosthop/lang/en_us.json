@@ -40,5 +40,7 @@
   "screen.hosthop.recovery_required": "Recovery is required before hosting again",
   "screen.hosthop.cancelled": "Host startup cancelled",
   "screen.hosthop.saving_world": "Saving the shared world; keep Minecraft open",
+  "screen.hosthop.uploading": "Uploading world: %s%%. Keep Minecraft open",
+  "screen.hosthop.upload_confirming": "Upload complete; confirming save. Keep Minecraft open",
   "screen.hosthop.saved_world": "Shared world saved successfully"
 }

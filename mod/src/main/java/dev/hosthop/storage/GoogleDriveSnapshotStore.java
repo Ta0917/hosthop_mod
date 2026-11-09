@@ -86,6 +86,11 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
 
     /** Creates a new Drive file; never updates an existing object. Runs off the game thread. */
     public ObjectRef upload(Path archive, String folderId, String accessToken) throws IOException, InterruptedException {
+        return upload(archive, folderId, accessToken, ignored -> {});
+    }
+
+    @Override public ObjectRef upload(Path archive, String folderId, String accessToken, java.util.function.LongConsumer progress) throws IOException, InterruptedException {
+        if (progress == null) throw new IllegalArgumentException("Missing progress callback");
         if (folderId == null || !folderId.matches("[A-Za-z0-9_-]{1,200}") || accessToken == null
                 || accessToken.isBlank() || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
             throw new IllegalArgumentException("Invalid Drive credentials or folder");
@@ -111,6 +116,7 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         if (!trustedSession(session)) throw new IOException("Untrusted Drive upload session");
         var uploadedHash = digest();
         long offset = 0;
+        progress.accept(0);
         Reply finalResponse = null;
         try (var input = Files.newInputStream(archive, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
             while (offset < size) {
@@ -132,6 +138,7 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
                     finalResponse = response;
                 }
                 offset += length;
+                progress.accept(offset * 100 / size);
             }
             if (input.read() != -1) throw new IOException("Snapshot changed during upload");
         }
