@@ -81,18 +81,27 @@ public final class HostRuntimeSmoke {
                 if (server.getWorldData().getSinglePlayerUUID() != null) throw new IllegalStateException("previous host identity was retained");
                 block = new CompletableFuture<>();
                 server.execute(() -> {
-                    try { server.overworld().getChunk(0, 0); server.overworld().setBlock(MARKER, Blocks.DIAMOND_BLOCK.defaultBlockState(), 3); block.complete(true); }
+                    try {
+                        server.overworld().getChunk(0, 0);
+                        if (Boolean.getBoolean("hosthop.verifyCloseSmoke")) block.complete(server.overworld().getBlockState(MARKER).is(Blocks.DIAMOND_BLOCK));
+                        else { server.overworld().setBlock(MARKER, Blocks.DIAMOND_BLOCK.defaultBlockState(), 3); block.complete(true); }
+                    }
                     catch (Throwable failure) { block.completeExceptionally(failure); }
                 });
                 stage = 3;
             } else if (stage == 3 && block.isDone()) {
-                block.join();
+                if (!block.join()) throw new IllegalStateException("closed-host world change was not restored");
                 if (Boolean.getBoolean("hosthop.closeHostSmoke")) { stage = 99; minecraft.stop(); return; }
                 minecraft.disconnect(new TitleScreen(), false);
                 stage = 4;
             } else if (stage == 4 && !HostWorldRuntime.active()) {
                 String expected = Boolean.getBoolean("hosthop.interruptedSmoke") ? "screen.hosthop.recovery_required" : "screen.hosthop.saved_world";
                 if (!HostWorldRuntime.lastStatus().equals(expected)) throw new IllegalStateException("first save result unexpected: " + HostWorldRuntime.lastStatus());
+                if (Boolean.getBoolean("hosthop.verifyCloseSmoke")) {
+                    Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-close-restore-result.txt"), "verified");
+                    System.out.println("HOSTHOP_CLOSE_RESTORE_SMOKE world change restored=true");
+                    finish(minecraft); return;
+                }
                 if (!HostWorldRuntime.startWithStore(context.invitation(), context.credentials(), "", key -> {}, context.storage(), context.authority()))
                     throw new IllegalStateException("second host did not start");
                 stage = 5;
@@ -118,6 +127,10 @@ public final class HostRuntimeSmoke {
                 throw new IllegalStateException("host startup failed: " + HostWorldRuntime.lastStatus());
             }
         } catch (Throwable failure) {
+            if (Boolean.getBoolean("hosthop.verifyCloseSmoke")) {
+                try { Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-close-restore-failure.txt"), failure.toString()); }
+                catch (Exception ignored) { }
+            }
             System.err.println("HOSTHOP_HOST_SMOKE failure=" + failure.getMessage());
             failure.printStackTrace();
             finish(minecraft);
@@ -129,7 +142,19 @@ public final class HostRuntimeSmoke {
             var invitation = Invitation.decode(Files.readString(Path.of(System.getProperty("hosthop.realInvite"))).trim());
             var vault = new WindowsSecretStore(Path.of(System.getProperty("hosthop.realCredentials")));
             var credentials = new DriveCredentialManager(vault, new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret()));
-            return new Context(null, invitation, credentials, new GoogleDriveSnapshotStore(),
+            var drive = new GoogleDriveSnapshotStore();
+            SnapshotStore store = drive;
+            if (Boolean.getBoolean("hosthop.closeHostSmoke")) store = new SnapshotStore() {
+                @Override public void checkUploadCapacity(long bytes, String token) throws java.io.IOException, InterruptedException { drive.checkUploadCapacity(bytes, token); }
+                @Override public GoogleDriveSnapshotStore.ObjectRef upload(Path archive, String folder, String token) throws java.io.IOException, InterruptedException {
+                    Thread.sleep(17_000);
+                    return drive.upload(archive, folder, token);
+                }
+                @Override public SnapshotVerifier.Result download(GoogleDriveSnapshotStore.ObjectRef object, Path path, String token) throws java.io.IOException, InterruptedException {
+                    return drive.download(object, path, token);
+                }
+            };
+            return new Context(null, invitation, credentials, store,
                     new LeaseAuthorityClient(URI.create(invitation.authority()), invitation.memberToken()));
         }
         Path temp = gameDir.resolve("hosthop-smoke");

@@ -81,6 +81,10 @@ neoForge {
                     systemProperty 'hosthop.closeHostSmoke', 'true'
                     systemProperty 'hosthop.fakeRelaySmoke', 'true'
                 }
+                if (project.hasProperty('hosthopVerifyCloseSmoke')) {
+                    systemProperty 'hosthop.verifyCloseSmoke', 'true'
+                    systemProperty 'hosthop.fakeRelaySmoke', 'true'
+                }
                 if (project.hasProperty('hosthopRealSmoke')) {
                     systemProperty 'hosthop.realSmoke', 'true'
                     systemProperty 'hosthop.realInvite', project.hasProperty('hosthopRealInvitation')
@@ -408,6 +412,13 @@ tasks.register('driveResumeLiveCheck', JavaExec) {
     mainClass = 'dev.hosthop.storage.DriveResumeLiveCheck'
     if (project.hasProperty('deltaInvitation') && project.hasProperty('deltaCredentials') && project.hasProperty('deltaDirectory'))
         args project.property('deltaInvitation'), project.property('deltaCredentials'), project.property('deltaDirectory')
+}
+tasks.register('seedGameWorldLiveCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.SeedGameWorldLiveCheck'
+    if (project.hasProperty('deltaInvitation') && project.hasProperty('deltaCredentials') && project.hasProperty('gameSeed') && project.hasProperty('deltaDirectory'))
+        args project.property('deltaInvitation'), project.property('deltaCredentials'), project.property('gameSeed'), project.property('deltaDirectory')
 }
 tasks.register('deltaAccessLiveCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
