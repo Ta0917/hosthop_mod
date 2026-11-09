@@ -23,6 +23,19 @@ public final class SaveKeepAliveTest {
         }
         if (SaveKeepAlive.suppressWatchdog("post-main", false)
                 || SaveKeepAlive.suppressWatchdog("window close callback", false)) throw new AssertionError("watchdog suppressed without a host");
+        var first = new SaveKeepAlive();
+        var second = new SaveKeepAlive();
+        var waiting = new Thread(SaveKeepAlive::awaitCompletion);
+        waiting.start();
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!SaveKeepAlive.waitingForCompletion() && System.nanoTime() - until < 0) Thread.sleep(10);
+        if (!SaveKeepAlive.waitingForCompletion()) throw new AssertionError("loader wait did not start");
+        first.close();
+        Thread.sleep(100);
+        if (!waiting.isAlive()) throw new AssertionError("loader closed with another save active");
+        second.close();
+        waiting.join(5000);
+        if (waiting.isAlive() || SaveKeepAlive.active()) throw new AssertionError("loader wait did not finish");
         var dir = Files.createTempDirectory("hosthop-keepalive-test-");
         var marker = dir.resolve("saved.txt");
         String executable = System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win") ? "java.exe" : "java";

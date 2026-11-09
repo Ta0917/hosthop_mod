@@ -5,7 +5,6 @@ import dev.hosthop.snapshot.SnapshotWriter;
 import dev.hosthop.world.SaveKeepAlive;
 import java.nio.file.Files;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.screens.TitleScreen;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -17,18 +16,18 @@ public final class BackgroundExitSmoke {
     private static boolean started;
     @SubscribeEvent public static void tick(ClientTickEvent.Post event) throws Exception {
         var minecraft = Minecraft.getInstance();
-        if (!Boolean.getBoolean("hosthop.backgroundExitSmoke") || started || !(minecraft.gui.screen() instanceof TitleScreen)) return;
+        if (!Boolean.getBoolean("hosthop.backgroundExitSmoke") || started || minecraft.gui.screen() == null) return;
         started = true;
         var dir = minecraft.gameDirectory.toPath().resolve("hosthop-background-exit-test");
         Files.createDirectory(dir);
         var world = Files.createDirectory(dir.resolve("world"));
         Files.writeString(world.resolve("level.dat"), "isolated background save");
         var keepAlive = new SaveKeepAlive();
-        Thread renderThread = Thread.currentThread();
         var worker = new Thread(() -> {
             try {
-                renderThread.join(30000);
-                if (renderThread.isAlive()) throw new IllegalStateException("Client main thread did not exit");
+                long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30);
+                while (!SaveKeepAlive.waitingForCompletion() && System.nanoTime() - deadline < 0) Thread.sleep(50);
+                if (!SaveKeepAlive.waitingForCompletion()) throw new IllegalStateException("Client did not reach the post-window save wait");
                 // Vanilla's post-main watchdog would kill the JVM after 15 seconds.
                 Thread.sleep(17000);
                 var archive = dir.resolve("snapshot.zip");

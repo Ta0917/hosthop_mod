@@ -4,6 +4,6 @@
   "package": "dev.hosthop.relay.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": ["E4mcSessionMixin", "E4mcAssignmentMixin", "E4mcInactiveMixin", "MinecraftServerStopMixin"],
-  "client": ["DisconnectedScreenAccessor", "ClientShutdownWatchdogMixin"],
+  "client": ["DisconnectedScreenAccessor", "ClientShutdownWatchdogMixin", "ClientMainExitMixin"],
   "injectors": { "defaultRequire": 0 }
 }
