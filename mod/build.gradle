@@ -376,6 +376,13 @@ tasks.register('seedLatestCopyLive', JavaExec) {
         args project.property('seedInvitation'), project.property('seedCredentials'), project.property('seedArchive'), project.property('seedDirectory')
     }
 }
+tasks.register('restoreTestSessionLive', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.RestoreTestSessionLive'
+    if (project.hasProperty('restoreInvitation') && project.hasProperty('restoreCredentials') && project.hasProperty('restoreWorld') && project.hasProperty('restoreOutput'))
+        args project.property('restoreInvitation'), project.property('restoreCredentials'), project.property('restoreWorld'), project.property('restoreOutput')
+}
 tasks.register('driveCrossAccountLiveCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath
