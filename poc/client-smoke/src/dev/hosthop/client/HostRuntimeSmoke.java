@@ -58,7 +58,7 @@ public final class HostRuntimeSmoke {
         var minecraft = Minecraft.getInstance();
         try {
             if (System.nanoTime() - START > TimeUnit.MINUTES.toNanos(3)) throw new IllegalStateException("host smoke timed out at stage " + stage);
-            if (Boolean.getBoolean("hosthop.fakeRelaySmoke") && stage == 2 && !fakeRelayStarted
+            if (Boolean.getBoolean("hosthop.fakeRelaySmoke") && (stage == 2 || stage == 5) && !fakeRelayStarted
                     && minecraft.getSingleplayerServer() != null && minecraft.player != null) {
                 fakeRelayStarted = true;
                 E4mcRelayBridge.begin(FAKE_RELAY);
@@ -102,6 +102,18 @@ public final class HostRuntimeSmoke {
                     System.out.println("HOSTHOP_CLOSE_RESTORE_SMOKE world change restored=true");
                     finish(minecraft); return;
                 }
+                if (Boolean.getBoolean("hosthop.requireDeltaSmoke")) {
+                    Path sessions = minecraft.gameDirectory.toPath().resolve("hosthop/sessions");
+                    try (var entries = Files.list(sessions)) {
+                        if (entries.noneMatch(path -> Files.isRegularFile(path.resolve("delta.bin"))))
+                            throw new IllegalStateException("first host did not publish a delta");
+                    }
+                    // Simulate another machine with no local base or delta cache.
+                    Path previous = Files.createDirectory(minecraft.gameDirectory.toPath().resolve("hosthop-prior-sessions"));
+                    try (var entries = Files.list(sessions)) {
+                        for (var entry : entries.toList()) Files.move(entry, previous.resolve(entry.getFileName()));
+                    }
+                }
                 if (!HostWorldRuntime.startWithStore(context.invitation(), context.credentials(), "", key -> {}, context.storage(), context.authority()))
                     throw new IllegalStateException("second host did not start");
                 stage = 5;
@@ -121,12 +133,18 @@ public final class HostRuntimeSmoke {
                 stage = 7;
             } else if (stage == 7 && !HostWorldRuntime.active()) {
                 if (!HostWorldRuntime.lastStatus().equals("screen.hosthop.saved_world")) throw new IllegalStateException("second save failed: " + HostWorldRuntime.lastStatus());
+                if (Boolean.getBoolean("hosthop.requireDeltaSmoke"))
+                    Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-delta-host-result.txt"), "verified");
                 System.out.println("HOSTHOP_HOST_SMOKE two integrated hosts restored world change=true");
                 finish(minecraft);
             } else if ((stage == 2 || stage == 5) && !HostWorldRuntime.active()) {
                 throw new IllegalStateException("host startup failed: " + HostWorldRuntime.lastStatus());
             }
         } catch (Throwable failure) {
+            if (Boolean.getBoolean("hosthop.requireDeltaSmoke")) {
+                try { Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-delta-host-failure.txt"), failure.toString()); }
+                catch (Exception ignored) { }
+            }
             if (Boolean.getBoolean("hosthop.verifyCloseSmoke")) {
                 try { Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-close-restore-failure.txt"), failure.toString()); }
                 catch (Exception ignored) { }

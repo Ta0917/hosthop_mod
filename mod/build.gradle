@@ -85,6 +85,8 @@ neoForge {
                     systemProperty 'hosthop.verifyCloseSmoke', 'true'
                     systemProperty 'hosthop.fakeRelaySmoke', 'true'
                 }
+                if (project.hasProperty('hosthopFakeRelaySmoke')) systemProperty 'hosthop.fakeRelaySmoke', 'true'
+                if (project.hasProperty('hosthopRequireDeltaSmoke')) systemProperty 'hosthop.requireDeltaSmoke', 'true'
                 if (project.hasProperty('hosthopRealSmoke')) {
                     systemProperty 'hosthop.realSmoke', 'true'
                     systemProperty 'hosthop.realInvite', project.hasProperty('hosthopRealInvitation')
