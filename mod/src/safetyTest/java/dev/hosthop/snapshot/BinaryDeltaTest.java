@@ -23,6 +23,20 @@ public final class BinaryDeltaTest {
         if (!BinaryDelta.inspect(patch).base().equals(baseRef)) throw new AssertionError("base reference mismatch");
         var restored = root.resolve("restored.zip"); BinaryDelta.apply(patch, base, restored);
         if (Files.mismatch(updated, restored) != -1) throw new AssertionError("delta reconstruction mismatch");
+        // Exercise deletion, new directories and changes inside an existing region.
+        Files.delete(world.resolve("player.dat"));
+        Files.createDirectories(world.resolve("nested"));
+        Files.writeString(world.resolve("nested/extra.dat"), "additional content");
+        for (int i = 0; i < 4096; i++) region[region.length / 2 + i] ^= (byte) (i * 31);
+        Files.write(world.resolve("region.dat"), region);
+        var changed = root.resolve("changed.zip"); SnapshotWriter.create(world, changed);
+        var changedDelta = root.resolve("changed.delta"); BinaryDelta.create(base, baseRef, changed, changedDelta);
+        var changedRestored = root.resolve("changed-restored.zip"); BinaryDelta.apply(changedDelta, base, changedRestored);
+        if (Files.mismatch(changed, changedRestored) != -1) throw new AssertionError("file changes were not preserved");
+        var restoredWorld = root.resolve("restored-world"); SnapshotVerifier.restore(changedRestored, restoredWorld);
+        if (Files.exists(restoredWorld.resolve("player.dat")) || !Files.readString(restoredWorld.resolve("nested/extra.dat")).equals("additional content")
+                || !java.util.Arrays.equals(Files.readAllBytes(restoredWorld.resolve("region.dat")), region))
+            throw new AssertionError("restored world files differ");
         var wrongBase = root.resolve("wrong.zip"); Files.copy(base, wrongBase);
         try (var channel = java.nio.channels.FileChannel.open(wrongBase, java.nio.file.StandardOpenOption.WRITE)) { channel.write(java.nio.ByteBuffer.wrap(new byte[]{0})); }
         try { BinaryDelta.apply(patch, wrongBase, root.resolve("bad-base-output.zip")); throw new AssertionError("wrong base accepted"); }
