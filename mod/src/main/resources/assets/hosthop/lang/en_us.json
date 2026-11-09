@@ -33,6 +33,7 @@
   "screen.hosthop.e4mc_required": "e4mc 6.2.3 is required to host",
   "screen.hosthop.authorize_first": "Authorize Google Drive before hosting",
   "screen.hosthop.already_active": "A shared-world session is already active",
+  "screen.hosthop.local_process_busy": "Another Minecraft process is handling the shared world. Please wait.",
   "screen.hosthop.preparing": "Preparing the shared world...",
   "screen.hosthop.host_ready": "Shared world is open",
   "screen.hosthop.host_failed": "Host startup failed; the local copy was kept",

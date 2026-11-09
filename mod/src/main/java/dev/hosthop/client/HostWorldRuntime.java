@@ -53,6 +53,9 @@ import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 /** Runs the shared-world host lifecycle without blocking the game thread. */
 @EventBusSubscriber(modid = HostHop.MOD_ID, value = Dist.CLIENT)
 public final class HostWorldRuntime {
+    private static final class LocalProcessBusy extends IOException {
+        LocalProcessBusy() { super("Another HostHop process is running"); }
+    }
     private static final AtomicReference<HostWorldRuntime> ACTIVE = new AtomicReference<>();
     private static volatile String lastStatus = "screen.hosthop.initial";
     private static volatile int uploadPercent = -1;
@@ -123,8 +126,8 @@ public final class HostWorldRuntime {
             Files.createDirectories(config);
             processChannel = FileChannel.open(config.resolve("runtime.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
             try { processLock = processChannel.tryLock(); }
-            catch (OverlappingFileLockException inUse) { throw new IOException("HostHop is already running", inUse); }
-            if (processLock == null) throw new IOException("HostHop is already running");
+            catch (OverlappingFileLockException inUse) { throw new LocalProcessBusy(); }
+            if (processLock == null) throw new LocalProcessBusy();
             pendingPath = config.resolve("pending-host.dat");
             var pending = new WindowsSecretStore(pendingPath);
             if (pending.exists()) {
@@ -203,7 +206,8 @@ public final class HostWorldRuntime {
                 else if (error instanceof dev.hosthop.storage.GoogleDriveSnapshotStore.QuotaExceeded && lastStatus.equals("screen.hosthop.host_failed"))
                     tell("screen.hosthop.drive_insufficient");
             } else {
-                tell(error instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace ? "screen.hosthop.disk_insufficient"
+                tell(error instanceof LocalProcessBusy ? "screen.hosthop.local_process_busy"
+                        : error instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace ? "screen.hosthop.disk_insufficient"
                         : error instanceof dev.hosthop.storage.GoogleDriveSnapshotStore.QuotaExceeded ? "screen.hosthop.drive_insufficient" : "screen.hosthop.host_failed");
                 cleanup();
             }
