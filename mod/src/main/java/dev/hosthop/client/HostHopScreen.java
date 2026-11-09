@@ -29,7 +29,7 @@ public final class HostHopScreen extends Screen {
     private final Screen parent;
     private final AtomicLong request = new AtomicLong();
     private Component status = Component.translatable("screen.hosthop.initial");
-    private Button register, authorize, authorizeSnapshot, join, history;
+    private Button register, authorize, authorizeSnapshot, join, history, exportRecovery;
     private EditBox initialWorld;
     private boolean startedHere;
     private boolean watchingSave;
@@ -52,11 +52,30 @@ public final class HostHopScreen extends Screen {
                 .bounds(x, height / 2 + 34, 130, 20).build());
         history = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.history"), button -> Minecraft.getInstance().gui.setScreen(new HostHopHistoryScreen(this)))
                 .bounds(x + 134, height / 2 + 34, 76, 20).build());
+        exportRecovery = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.export_recovery"), button -> exportRecovery())
+                .bounds(x, height / 2 + 60, 210, 20).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
-                .bounds(x, height / 2 + 62, 210, 20).build());
+                .bounds(x, height / 2 + 86, 210, 20).build());
         status = Component.translatable(HostWorldRuntime.lastStatus());
         watchingSave = HostWorldRuntime.active() && HostWorldRuntime.lastStatus().equals("screen.hosthop.saving_world");
         if (watchingSave) busy(true, "screen.hosthop.saving_world");
+    }
+
+    private void exportRecovery() {
+        long id = request.incrementAndGet();
+        busy(true, "screen.hosthop.exporting_recovery");
+        CompletableFuture.runAsync(() -> {
+            try {
+                var invite = Invitation.fromSecrets(new WindowsSecretStore(secretPath()).load());
+                String name = dev.hosthop.world.LocalRecoveryExport.export(Minecraft.getInstance().gameDirectory.toPath(), secretPath().getParent(), invite);
+                Minecraft.getInstance().execute(() -> {
+                    if (id == request.get() && Minecraft.getInstance().gui.screen() == this) {
+                        busy(false, "screen.hosthop.exported_recovery");
+                        status = Component.translatable("screen.hosthop.exported_recovery", name);
+                    }
+                });
+            } catch (Exception failure) { finish(id, "screen.hosthop.export_recovery_failed"); }
+        });
     }
 
     @Override public void tick() {
@@ -193,7 +212,7 @@ public final class HostHopScreen extends Screen {
             if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(false, message);
         });
     }
-    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
+    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; exportRecovery.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
 
     @Override public void onClose() {
         request.incrementAndGet();
