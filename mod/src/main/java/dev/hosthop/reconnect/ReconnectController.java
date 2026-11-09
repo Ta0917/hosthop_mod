@@ -13,7 +13,7 @@ public final class ReconnectController {
     public static final class Session { private Session() {} }
     public static final class Attempt { private Attempt() {} }
 
-    private static final int MAX_ATTEMPTS = 5;
+    private static final int MAX_BACKOFF_SHIFT = 5;
     private static final long BASE_DELAY_NANOS = 1_000_000_000L;
     private Session session;
     private Attempt attempt;
@@ -45,7 +45,7 @@ public final class ReconnectController {
                 || destination.epoch() < lastEpoch || !RelayAddress.valid(destination.address()) || destination.deadline() == null
                 || !destination.deadline().isUsable(nowNanos, nowMillis)) return null;
         lastEpoch = destination.epoch();
-        attempts++;
+        if (attempts < MAX_BACKOFF_SHIFT + 1) attempts++;
         attempt = new Attempt();
         state = State.CONNECTING;
         return attempt;
@@ -62,10 +62,10 @@ public final class ReconnectController {
         if (!current(session, attempt) || reason == null) return false;
         this.attempt = null;
         if (!timeValid(nowNanos)) return false;
-        if (reason != Failure.TRANSIENT || attempts >= MAX_ATTEMPTS) {
+        if (reason != Failure.TRANSIENT) {
             state = State.STOPPED;
         } else {
-            nextTime = nowNanos + (BASE_DELAY_NANOS << (attempts - 1));
+            nextTime = nowNanos + (BASE_DELAY_NANOS << Math.min(MAX_BACKOFF_SHIFT, attempts - 1));
             state = State.WAITING;
         }
         return true;

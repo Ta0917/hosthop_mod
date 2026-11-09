@@ -29,6 +29,10 @@ public final class ReconnectUiSmoke {
         GuestReconnect.screenOpening(opening);
         if (!(opening.getNewScreen() instanceof HostHopReconnectScreen)) throw new AssertionError("Transient disconnect did not start waiting");
         var tracked = (GuestReconnect) current.get(null);
+        var refused = (net.minecraft.network.chat.contents.TranslatableContents) Component.translatable("disconnect.genericReason", "Connection refused").getContents();
+        var rejected = (net.minecraft.network.chat.contents.TranslatableContents) Component.translatable("disconnect.genericReason", "Authentication failed").getContents();
+        if (!GuestReconnect.transientReason(refused, true) || GuestReconnect.transientReason(refused, false)
+                || GuestReconnect.transientReason(rejected, true)) throw new AssertionError("Connection errors classified incorrectly");
         var attempt = tracked.controller.connect(tracked.session, endpoint, System.nanoTime(), System.currentTimeMillis());
         if (!tracked.controller.connected(tracked.session, attempt)) throw new AssertionError("Reconnect was not accepted");
         loggedOut.setBoolean(tracked, true);

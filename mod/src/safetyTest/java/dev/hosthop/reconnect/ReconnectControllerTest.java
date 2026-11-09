@@ -32,13 +32,14 @@ public final class ReconnectControllerTest {
 
         var limited = controller.start("world", 5, 0);
         long now = 0;
-        for (int i = 0; i < 5; i++) {
-            var attempt = controller.connect(limited, destination, now, now / 1_000_000);
+        for (int i = 0; i < 9; i++) {
+            var attempt = controller.connect(limited, destinationAt("world", 5, now), now, now / 1_000_000);
             check(attempt != null);
             check(controller.failed(limited, attempt, ReconnectController.Failure.TRANSIENT, now));
-            now += 1_000_000_000L << i;
+            now += 1_000_000_000L << Math.min(i, 5);
         }
-        check(controller.state() == ReconnectController.State.STOPPED);
+        check(controller.state() == ReconnectController.State.WAITING);
+        check(controller.cancel(limited));
         var reverse = controller.start("world", 5, 100);
         check(controller.connect(reverse, destination, 99, 0) == null);
         check(controller.state() == ReconnectController.State.STOPPED);
@@ -50,6 +51,11 @@ public final class ReconnectControllerTest {
     private static LeaseAuthorityClient.Endpoint destination(String world, long epoch) {
         return new LeaseAuthorityClient.Endpoint(world, epoch, 1, 1, "host.e4mc.link",
                 ConservativeLeaseDeadline.fromGrant(0, 0, 100, 130, 2));
+    }
+
+    private static LeaseAuthorityClient.Endpoint destinationAt(String world, long epoch, long now) {
+        return new LeaseAuthorityClient.Endpoint(world, epoch, 1, 1, "host.e4mc.link",
+                ConservativeLeaseDeadline.fromGrant(now, now / 1_000_000, 100, 130, 2));
     }
 
     private static void check(boolean ok) { if (!ok) throw new AssertionError(); }

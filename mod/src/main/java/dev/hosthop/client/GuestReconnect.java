@@ -77,7 +77,7 @@ public final class GuestReconnect {
         }
         if (!(disconnected instanceof DisconnectedScreenAccessor accessor)
                 || !(accessor.hosthop$details().reason().getContents() instanceof TranslatableContents reason)
-                || !transientReason(reason.getKey())) { value.cancel(); return; }
+                || !transientReason(reason, value.reconnecting && event.getCurrentScreen() instanceof ConnectScreen)) { value.cancel(); return; }
         if (value.reconnecting) {
             if (!value.controller.failed(value.session, value.attempt, ReconnectController.Failure.TRANSIENT, System.nanoTime())
                     || value.controller.state() == ReconnectController.State.STOPPED) { value.cancel(); return; }
@@ -95,5 +95,15 @@ public final class GuestReconnect {
     static boolean transientReason(String key) {
         return "disconnect.endOfStream".equals(key) || "disconnect.timeout".equals(key)
                 || "multiplayer.disconnect.server_shutdown".equals(key);
+    }
+
+    static boolean transientReason(TranslatableContents reason, boolean connecting) {
+        if (transientReason(reason.getKey())) return true;
+        if (!connecting || !"disconnect.genericReason".equals(reason.getKey()) || reason.getArgs().length != 1
+                || !(reason.getArgs()[0] instanceof String detail)) return false;
+        String text = detail.toLowerCase(java.util.Locale.ROOT);
+        return text.contains("connection refused") || text.contains("connection timed out")
+                || text.contains("connection reset") || text.contains("network is unreachable")
+                || text.contains("no route to host") || text.contains("unknown host");
     }
 }
