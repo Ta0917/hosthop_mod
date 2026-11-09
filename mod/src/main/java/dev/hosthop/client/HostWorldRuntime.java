@@ -333,13 +333,16 @@ public final class HostWorldRuntime {
             try {
                 candidate.getRunningThread().join(30_000);
                 if (candidate.getRunningThread().isAlive() || !ServerStopSignal.completedFor(candidate) || monitor == null
-                        || monitor.hasFailure() || failed.get() || gate.phase() != LocalHostGate.Phase.QUIESCING)
+                        || monitor.hasFailure())
                     throw new IOException("Server shutdown could not be verified");
                 shutdownStage = "relay shutdown";
                 for (int i = 0; i < 50 && relay.sessionOpen(); i++) Thread.sleep(100);
                 CompletableFuture.runAsync(() -> {}, relayWorker).get(15, TimeUnit.SECONDS);
-                if (relay.sessionOpen() || gate.phase() != LocalHostGate.Phase.QUIESCING) throw new IOException("Relay did not close");
+                if (relay.sessionOpen()) throw new IOException("Relay did not close");
+                // A lost lease must block publication, but a verified stopped world
+                // is still useful recovery evidence if the same lease remains valid.
                 new WindowsSecretStore(pendingPath).save(pendingData("stopped", acquisition.lease(), worldPath.getFileName().toString()));
+                if (failed.get() || gate.phase() != LocalHostGate.Phase.QUIESCING) throw new IOException("Lease cannot publish");
                 tell("screen.hosthop.saving_world");
                 shutdownStage = "Drive authorization";
                 String token = credentials.access().accessToken();
