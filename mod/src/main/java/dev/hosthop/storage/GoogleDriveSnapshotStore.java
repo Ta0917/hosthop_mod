@@ -116,36 +116,72 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         try { session = URI.create(response.headers().firstValue("Location").orElseThrow()); }
         catch (RuntimeException invalid) { throw new IOException("Invalid Drive upload session", invalid); }
         if (!trustedSession(session)) throw new IOException("Untrusted Drive upload session");
-        var uploadedHash = digest();
         long offset = 0;
+        int retries = 0;
         progress.accept(0);
         Reply finalResponse = null;
-        try (var input = Files.newInputStream(archive, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+        try (var input = FileChannel.open(archive, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
             while (offset < size) {
                 int length = (int) Math.min(CHUNK, size - offset);
-                byte[] chunk = input.readNBytes(length);
-                if (chunk.length != length) throw new IOException("Snapshot changed during upload");
-                uploadedHash.update(chunk);
+                byte[] chunk = new byte[length];
+                var buffer = ByteBuffer.wrap(chunk);
+                input.position(offset);
+                while (buffer.hasRemaining()) if (input.read(buffer) < 0) throw new IOException("Snapshot changed during upload");
                 long last = offset + length - 1;
                 var upload = HttpRequest.newBuilder(session).timeout(Duration.ofMinutes(2))
                         .header("Authorization", "Bearer " + accessToken).header("Content-Type", "application/zip")
                         .header("Content-Range", "bytes " + offset + "-" + last + "/" + size)
                         .PUT(HttpRequest.BodyPublishers.ofByteArray(chunk)).build();
-                response = transport.send(upload);
-                if (last + 1 < size) {
-                    if (response.status() != 308 || !response.headers().firstValue("Range").orElse("").equals("bytes=0-" + last))
-                        throw new IOException("Drive upload was interrupted");
-                } else {
-                    if (response.status() != 200 && response.status() != 201) throw new IOException("Drive upload did not finish");
-                    finalResponse = response;
+                try { response = transport.send(upload); }
+                catch (IOException interrupted) { response = null; }
+                if (response == null || response.status() >= 500 && response.status() <= 599) {
+                    if (++retries > 4) throw new IOException("Drive upload could not be resumed");
+                    response = uploadStatus(session, size, accessToken);
                 }
-                offset += length;
+                if (response.status() == 200 || response.status() == 201) {
+                    if (last != size - 1) throw new IOException("Drive completed upload prematurely");
+                    finalResponse = response;
+                    offset = size;
+                } else if (response.status() == 308) {
+                    long acknowledged = acknowledgedOffset(response, size);
+                    if (acknowledged < offset || acknowledged > last + 1) throw new IOException("Invalid Drive upload position");
+                    if (acknowledged == offset) {
+                        if (++retries > 4) throw new IOException("Drive upload made no progress");
+                    } else retries = 0;
+                    offset = acknowledged;
+                } else throw new IOException("Drive upload did not finish");
                 progress.accept(offset * 100 / size);
             }
-            if (input.read() != -1) throw new IOException("Snapshot changed during upload");
+            if (input.size() != size) throw new IOException("Snapshot changed during upload");
         }
-        if (!HexFormat.of().formatHex(uploadedHash.digest()).equals(expectedHash)) throw new IOException("Snapshot changed during upload");
+        if (!hashFile(archive).equals(expectedHash)) throw new IOException("Snapshot changed during upload");
         return validateMetadata(finalResponse, folderId, name, expectedHash, size);
+    }
+
+    private Reply uploadStatus(URI session, long size, String token) throws IOException, InterruptedException {
+        var request = HttpRequest.newBuilder(session).timeout(Duration.ofSeconds(30))
+                .header("Authorization", "Bearer " + token).header("Content-Range", "bytes */" + size)
+                .PUT(HttpRequest.BodyPublishers.noBody()).build();
+        IOException last = null;
+        for (int attempt = 0; attempt < 4; attempt++) {
+            try {
+                var response = transport.send(request);
+                if (response != null && (response.status() < 500 || response.status() > 599)) return response;
+            } catch (IOException failure) { last = failure; }
+            if (attempt < 3) Thread.sleep(1000L << attempt);
+        }
+        throw new IOException("Drive upload status unavailable", last);
+    }
+
+    private static long acknowledgedOffset(Reply response, long size) throws IOException {
+        String range = response.headers().firstValue("Range").orElse("");
+        if (range.isEmpty()) return 0;
+        if (!range.matches("bytes=0-(0|[1-9][0-9]{0,19})")) throw new IOException("Invalid Drive upload range");
+        try {
+            long last = Long.parseLong(range.substring(8));
+            if (last < 0 || last >= size - 1) throw new IOException("Invalid Drive upload range");
+            return last + 1;
+        } catch (NumberFormatException invalid) { throw new IOException("Invalid Drive upload range", invalid); }
     }
 
     /** Downloads to a new file, validates its SHA-256 and verifies the complete archive. */

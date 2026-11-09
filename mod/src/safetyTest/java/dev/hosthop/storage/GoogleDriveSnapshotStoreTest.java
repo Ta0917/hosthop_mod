@@ -42,6 +42,35 @@ public final class GoogleDriveSnapshotStoreTest {
             var uploaded = store.upload(archive, "folder", "test-token", progress::add);
             check(progress.size() == 3 && progress.get(0) == 0 && progress.get(1) > 0 && progress.get(1) < 100 && progress.get(2) == 100);
             check(calls.get() == 4 && uploaded.fileId().equals("file-id") && uploaded.sha256().equals(hash) && uploaded.size() == size);
+            String metadata = "{\"id\":\"file-id\",\"name\":\"" + hash + ".zip\",\"size\":\"" + size + "\",\"sha256Checksum\":\"" + hash + "\",\"parents\":[\"folder\"],\"trashed\":false}";
+            var resumeCalls = new AtomicInteger();
+            var resume = new GoogleDriveSnapshotStore(request -> {
+                int step = resumeCalls.getAndIncrement();
+                if (step == 0) return reply(200, Map.of(), "{\"storageQuota\":{}}");
+                if (step == 1) return reply(200, Map.of("Location", List.of("https://www.googleapis.com/upload/drive/v3/files?upload_id=test")), "");
+                if (step == 2) throw new IOException("response lost");
+                if (step == 3) {
+                    check(request.headers().firstValue("Content-Range").orElseThrow().equals("bytes */" + size));
+                    return reply(308, Map.of("Range", List.of("bytes=0-4194303")), "");
+                }
+                if (step == 4) {
+                    check(request.headers().firstValue("Content-Range").orElseThrow().equals("bytes 4194304-" + (size - 1) + "/" + size));
+                    throw new IOException("final response lost");
+                }
+                check(step == 5 && request.headers().firstValue("Content-Range").orElseThrow().equals("bytes */" + size));
+                return reply(200, Map.of(), metadata);
+            });
+            check(resume.upload(archive, "folder", "test-token").equals(uploaded) && resumeCalls.get() == 6);
+            var invalidPositionCalls = new AtomicInteger();
+            var invalidPosition = new GoogleDriveSnapshotStore(request -> {
+                int step = invalidPositionCalls.getAndIncrement();
+                if (step == 0) return reply(200, Map.of(), "{\"storageQuota\":{}}");
+                if (step == 1) return reply(200, Map.of("Location", List.of("https://www.googleapis.com/upload/drive/v3/files?upload_id=test")), "");
+                if (step == 2) throw new IOException("response lost");
+                return reply(308, Map.of("Range", List.of("bytes=0-999999999")), "");
+            });
+            try { invalidPosition.upload(archive, "folder", "test-token"); throw new AssertionError("invalid resume position accepted"); }
+            catch (IOException expected) { }
             var permission = new GoogleDriveSnapshotStore(request -> reply(404, Map.of(), ""));
             check(!permission.canRead(uploaded, "test-token"));
             check(!permission.canUseBase(uploaded, "folder", "test-token"));
