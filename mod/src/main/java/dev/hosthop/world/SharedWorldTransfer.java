@@ -9,6 +9,7 @@ import dev.hosthop.lease.PublicationRecord;
 import dev.hosthop.snapshot.SnapshotVerifier;
 import dev.hosthop.snapshot.SnapshotWriter;
 import dev.hosthop.snapshot.StoppedWorldLock;
+import dev.hosthop.snapshot.LocalSnapshotCache;
 import dev.hosthop.storage.SnapshotStore;
 import dev.hosthop.storage.GoogleDriveSnapshotStore;
 import java.io.IOException;
@@ -33,6 +34,11 @@ public final class SharedWorldTransfer {
     /** Restores to a new world directory; generation zero imports a stopped local copy. */
     public void prepare(LeaseCoordinator.Acquisition acquisition, Path initialCopy, Path archive, Path destination,
                         String driveToken) throws IOException, InterruptedException {
+        prepare(acquisition, initialCopy, archive, destination, driveToken, null);
+    }
+
+    public void prepare(LeaseCoordinator.Acquisition acquisition, Path initialCopy, Path archive, Path destination,
+                        String driveToken, Path cacheSessions) throws IOException, InterruptedException {
         if (acquisition == null || acquisition.epoch() < 1 || acquisition.generation() < 0) throw new IllegalStateException("Lease not acquired");
         if (acquisition.generation() == 0) {
             if (initialCopy == null) throw new IOException("Initial world copy required");
@@ -40,7 +46,14 @@ public final class SharedWorldTransfer {
         } else {
             var snapshot = authority.snapshot(acquisition.world());
             if (snapshot.generation() != acquisition.generation()) throw new IOException("Snapshot generation changed");
-            storage.download(snapshot.object(), archive, driveToken);
+            boolean cached = false;
+            try { if (cacheSessions != null) cached = LocalSnapshotCache.copyMatching(cacheSessions, archive, snapshot.object()); }
+            catch (IOException cacheError) {
+                if (Files.exists(archive)) throw cacheError;
+                cached = false;
+            }
+            if (!cached)
+                storage.download(snapshot.object(), archive, driveToken);
         }
         storage.checkUploadCapacity(Files.size(archive), driveToken);
         SnapshotVerifier.restore(archive, destination);

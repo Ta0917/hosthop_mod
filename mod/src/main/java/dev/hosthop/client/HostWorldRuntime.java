@@ -165,7 +165,7 @@ public final class HostWorldRuntime {
             var activeLease = acquisition;
             renewer.scheduleWithFixedDelay(() -> renew(activeLease), 15, 15, TimeUnit.SECONDS);
             if (cancelled.get()) { abortBeforeStart(); return; }
-            transfer.prepare(acquisition, initial, sessionDir.resolve("initial.zip"), worldPath, token.accessToken());
+            transfer.prepare(acquisition, initial, sessionDir.resolve("initial.zip"), worldPath, token.accessToken(), sessionDir.getParent());
             if (cancelled.get()) { abortBeforeStart(); return; }
             stage = "preparing host player identity";
             HostPlayerIdentity.prepare(worldPath);

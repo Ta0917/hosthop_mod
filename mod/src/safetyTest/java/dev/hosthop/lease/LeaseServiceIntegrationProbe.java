@@ -61,6 +61,7 @@ public final class LeaseServiceIntegrationProbe {
             tls.init(null, tm.getTrustManagers(), null);
             var http = HttpClient.newBuilder().sslContext(tls).followRedirects(HttpClient.Redirect.NEVER).build();
             var client = new LeaseAuthorityClient(base, "a".repeat(43), LeaseAuthorityClient.httpExchange(http, Duration.ofSeconds(5)), System::nanoTime, System::currentTimeMillis);
+            var downloads = new java.util.concurrent.atomic.AtomicInteger();
             SnapshotStore storage = new SnapshotStore() {
                 private int uploaded;
                 private final java.util.Map<String, Path> objects = new java.util.HashMap<>();
@@ -77,6 +78,7 @@ public final class LeaseServiceIntegrationProbe {
                     return new GoogleDriveSnapshotStore.ObjectRef(fileId, digest, size);
                 }
                 @Override public SnapshotVerifier.Result download(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String driveToken) throws java.io.IOException {
+                    downloads.incrementAndGet();
                     Files.copy(objects.get(object.fileId()), destination);
                     return SnapshotVerifier.verify(destination);
                 }
@@ -142,7 +144,11 @@ public final class LeaseServiceIntegrationProbe {
             check(next.acquire(nextAcquisition));
             check(client.snapshot("world").generation() == 1);
             var nextTransfer = new SharedWorldTransfer(nextGate, client, storage, System::nanoTime, System::currentTimeMillis);
-            nextTransfer.prepare(nextAcquisition, null, archiveB, preparedB, "drive-test-token");
+            var cachedSessions = Files.createDirectory(directory.resolve("cached-sessions"));
+            var previousSession = Files.createDirectory(cachedSessions.resolve("previous"));
+            Files.copy(finalArchive, previousSession.resolve("final.zip"));
+            nextTransfer.prepare(nextAcquisition, null, archiveB, preparedB, "drive-test-token", cachedSessions);
+            check(downloads.get() == 0);
             Files.writeString(preparedB.resolve("session.lock"), "lock");
             check(Files.readString(preparedB.resolve("level.dat")).equals("progress"));
             check(nextGate.beginHosting(nextAcquisition.attempt(), System.nanoTime(), System.currentTimeMillis()));
@@ -245,6 +251,9 @@ public final class LeaseServiceIntegrationProbe {
             Files.deleteIfExists(journal);
             Files.deleteIfExists(journal2);
             Files.deleteIfExists(finalArchive2);
+            Files.deleteIfExists(directory.resolve("cached-sessions/previous/final.zip"));
+            Files.deleteIfExists(directory.resolve("cached-sessions/previous"));
+            Files.deleteIfExists(directory.resolve("cached-sessions"));
             Files.deleteIfExists(store);
             Files.delete(directory);
         }
