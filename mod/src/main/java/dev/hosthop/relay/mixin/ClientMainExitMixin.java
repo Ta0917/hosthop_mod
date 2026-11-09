@@ -1,6 +1,7 @@
 package dev.hosthop.relay.mixin;
 
 import dev.hosthop.world.SaveKeepAlive;
+import dev.hosthop.client.HostWorldRuntime;
 import net.minecraft.client.main.Main;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -12,6 +13,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class ClientMainExitMixin {
     @Inject(method = "main", at = @At("RETURN"), require = 1)
     private static void hosthop$finishSaveBeforeLoaderClose(String[] arguments, CallbackInfo ci) {
+        HostWorldRuntime.cancelPreparing();
         SaveKeepAlive.awaitCompletion();
     }
 }

@@ -151,6 +151,7 @@ public final class HostWorldRuntime {
                     tell("screen.hosthop.recovery_required"); cleanup(); return;
                 }
             }
+            if (cancelled.get() || !minecraft.isRunning()) { tell("screen.hosthop.cancelled"); cleanup(); return; }
             String id = UUID.randomUUID().toString();
             Path game = minecraft.gameDirectory.toPath().toAbsolutePath().normalize();
             Path saves = game.resolve("saves");
@@ -176,9 +177,9 @@ public final class HostWorldRuntime {
             stage = "restoring world";
             var activeLease = acquisition;
             renewer.scheduleWithFixedDelay(() -> renew(activeLease), 15, 15, TimeUnit.SECONDS);
-            if (cancelled.get()) { abortBeforeStart(); return; }
+            if (cancelled.get() || !minecraft.isRunning()) { cancelled.set(true); abortBeforeStart(); return; }
             transfer.prepare(acquisition, initial, sessionDir.resolve("initial.zip"), worldPath, token.accessToken(), sessionDir.getParent());
-            if (cancelled.get()) { abortBeforeStart(); return; }
+            if (cancelled.get() || !minecraft.isRunning()) { cancelled.set(true); abortBeforeStart(); return; }
             stage = "preparing host player identity";
             HostPlayerIdentity.prepare(worldPath);
             pending.save(pendingData("starting", id, levelId));
