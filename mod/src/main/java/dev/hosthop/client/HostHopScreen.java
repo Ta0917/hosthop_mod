@@ -147,6 +147,7 @@ public final class HostHopScreen extends Screen {
                 finish(id, "screen.hosthop.snapshot_authorized");
             } catch (DriveCredentialManager.AccountMismatch failure) { finish(id, "screen.hosthop.account_mismatch"); }
             catch (DriveCredentialManager.ReauthorizationRequired failure) { finish(id, "screen.hosthop.reauthorize_drive"); }
+            catch (DriveCredentialManager.AuthorizationRequired failure) { finish(id, "screen.hosthop.authorize_first"); }
             catch (Exception failure) { finish(id, "screen.hosthop.snapshot_authorize_failed"); }
             finally { activeAuthorization = null; }
         });

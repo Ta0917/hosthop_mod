@@ -123,7 +123,8 @@ public final class HostWorldRuntime {
             try {
                 token = credentials.access();
             } catch (DriveCredentialManager.ReauthorizationRequired expired) { tell("screen.hosthop.reauthorize_drive"); cleanup(); return; }
-            catch (IOException unavailable) { tell("screen.hosthop.authorize_first"); cleanup(); return; }
+            catch (DriveCredentialManager.AuthorizationRequired missing) { tell("screen.hosthop.authorize_first"); cleanup(); return; }
+            catch (IOException unavailable) { tell("screen.hosthop.drive_access_failed"); cleanup(); return; }
             if (!invitation.folder().equals(token.folderId())) throw new IOException("Drive folder does not match invitation");
             Path config = net.neoforged.fml.loading.FMLPaths.CONFIGDIR.get().resolve("hosthop");
             stage = "local session lock";

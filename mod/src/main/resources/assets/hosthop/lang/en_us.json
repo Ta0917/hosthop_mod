@@ -37,6 +37,7 @@
   "screen.hosthop.e4mc_required": "e4mc 6.2.3 is required to host",
   "screen.hosthop.authorize_first": "Authorize Google Drive before hosting",
   "screen.hosthop.reauthorize_drive": "Google Drive authorization expired. Authorize Google Drive again.",
+  "screen.hosthop.drive_access_failed": "Could not access Google Drive. Check your connection and saved settings.",
   "screen.hosthop.already_active": "A shared-world session is already active",
   "screen.hosthop.local_process_busy": "Another Minecraft process is handling the shared world. Please wait.",
   "screen.hosthop.preparing": "Preparing the shared world...",

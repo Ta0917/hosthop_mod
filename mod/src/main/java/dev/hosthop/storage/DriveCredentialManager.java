@@ -8,6 +8,9 @@ import java.util.function.Consumer;
 
 /** Explicit consent and DPAPI-backed refresh credentials; call off the game thread. */
 public final class DriveCredentialManager {
+    public static final class AuthorizationRequired extends IOException {
+        private AuthorizationRequired() { super("Google Drive authorization required"); }
+    }
     public static final class ReauthorizationRequired extends IOException {
         private ReauthorizationRequired(Throwable cause) { super("Google Drive authorization expired or was revoked", cause); }
     }
@@ -87,10 +90,10 @@ public final class DriveCredentialManager {
     /** Refreshes credentials if needed; never opens a browser automatically. */
     public synchronized GoogleDriveAuthorization.Tokens access() throws IOException, InterruptedException {
         if (cached != null && System.nanoTime() - usableUntil < 0) return cached;
-        if (!vault.exists()) throw new IOException("Drive authorization required");
+        if (!vault.exists()) throw new AuthorizationRequired();
         var secrets = vault.load();
         String refresh = secrets.get(REFRESH), folder = secrets.get(FOLDER);
-        if (refresh == null || folder == null) throw new IOException("Drive authorization required");
+        if (refresh == null || folder == null) throw new AuthorizationRequired();
         GoogleDriveAuthorization.Tokens tokens;
         try { tokens = authorization.refresh(refresh, folder); }
         catch (GoogleDriveAuthorization.InvalidGrant expired) { throw new ReauthorizationRequired(expired); }

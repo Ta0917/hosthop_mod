@@ -55,6 +55,9 @@ public final class WindowsSecretStoreTest {
             try { manager.authorizeFile("snapshot-id", "folder", select); throw new AssertionError("different Google account accepted"); }
             catch (DriveCredentialManager.AccountMismatch expected) { }
             check(store.load().equals(before));
+            var missing = new DriveCredentialManager(new WindowsSecretStore(directory.resolve("missing.dat")), auth);
+            try { missing.access(); throw new AssertionError("missing credentials accepted"); }
+            catch (DriveCredentialManager.AuthorizationRequired expected) { }
             var expired = new DriveCredentialManager(store, new GoogleDriveAuthorization("client-id", "client-secret", request -> { throw new GoogleDriveAuthorization.InvalidGrant(); }));
             try { expired.access(); throw new AssertionError("expired credentials accepted"); }
             catch (DriveCredentialManager.ReauthorizationRequired expected) { }

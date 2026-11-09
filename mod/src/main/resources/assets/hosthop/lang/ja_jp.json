@@ -37,6 +37,7 @@
   "screen.hosthop.e4mc_required": "ホストにはe4mc 6.2.3が必要です",
   "screen.hosthop.authorize_first": "ホストする前にGoogle Driveを連携してください",
   "screen.hosthop.reauthorize_drive": "Google Driveの認証が失効しました。「Google Driveを連携」で再認証してください",
+  "screen.hosthop.drive_access_failed": "Google Driveを利用できません。通信状態や保存された設定を確認してください",
   "screen.hosthop.already_active": "共有ワールドの処理が進行中です",
   "screen.hosthop.local_process_busy": "別のMinecraftで共有データを処理中です。完了までお待ちください",
   "screen.hosthop.preparing": "共有ワールドを準備しています…",
