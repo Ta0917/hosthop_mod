@@ -30,6 +30,7 @@ public final class HostHopScreen extends Screen {
     private Button register, authorize, authorizeSnapshot, join, history;
     private EditBox initialWorld;
     private boolean startedHere;
+    private boolean watchingSave;
     private volatile DriveCredentialManager activeAuthorization;
 
     public HostHopScreen(Screen parent) { super(Component.translatable("screen.hosthop.title")); this.parent = parent; }
@@ -52,6 +53,16 @@ public final class HostHopScreen extends Screen {
         addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
                 .bounds(x, height / 2 + 62, 210, 20).build());
         status = Component.translatable(HostWorldRuntime.lastStatus());
+        watchingSave = HostWorldRuntime.active() && HostWorldRuntime.lastStatus().equals("screen.hosthop.saving_world");
+        if (watchingSave) busy(true, "screen.hosthop.saving_world");
+    }
+
+    @Override public void tick() {
+        super.tick();
+        if (watchingSave && !HostWorldRuntime.lastStatus().equals("screen.hosthop.saving_world")) {
+            watchingSave = false;
+            busy(false, HostWorldRuntime.lastStatus());
+        }
     }
 
     private void authorizeSnapshot() {
