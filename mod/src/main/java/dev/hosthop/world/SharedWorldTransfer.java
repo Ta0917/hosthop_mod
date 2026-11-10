@@ -32,6 +32,8 @@ public final class SharedWorldTransfer {
     private final java.util.function.LongConsumer downloadProgress;
     private GoogleDriveSnapshotStore.ObjectRef baseRef;
     private Path baseArchive;
+    private GoogleDriveSnapshotStore.ObjectRef checkpointBaseRef;
+    private Path checkpointBaseArchive;
 
     public SharedWorldTransfer(LocalHostGate gate, LeaseAuthorityClient authority, SnapshotStore storage,
                                LongSupplier nanos, LongSupplier millis) {
@@ -68,36 +70,41 @@ public final class SharedWorldTransfer {
         Path archive = directory.resolve("checkpoint.zip");
         SnapshotWriter.create(copiedWorld, archive);
         Path upload = archive;
-        if (!full && baseRef != null && baseArchive != null && storage.canUseBase(baseRef, folder, token)) {
+        var checkpointBase = checkpointBaseRef == null ? baseRef : checkpointBaseRef;
+        Path base = checkpointBaseArchive == null ? baseArchive : checkpointBaseArchive;
+        String baseId = "";
+        if (!full && checkpointBase != null && base != null && storage.canUseBase(checkpointBase, folder, token)) {
             Path delta = directory.resolve("checkpoint-delta.bin"), verified = directory.resolve("checkpoint-verified.zip");
             boolean created = false, verifiedCreated = false;
             try {
-                BinaryDelta.create(baseArchive, baseRef, archive, delta); created = true;
+                BinaryDelta.create(base, checkpointBase, archive, delta); created = true;
                 if (Files.size(delta) < Files.size(archive) * 3 / 4) {
-                    BinaryDelta.apply(delta, baseArchive, verified); verifiedCreated = true;
+                    BinaryDelta.apply(delta, base, verified); verifiedCreated = true;
                     if (Files.mismatch(archive, verified) != -1) throw new IOException("Checkpoint delta mismatch");
                     upload = delta;
+                    baseId = checkpointBase.fileId();
                 } else Files.delete(delta);
             } catch (IOException invalid) {
                 if (created) Files.deleteIfExists(delta);
             } finally { if (verifiedCreated) Files.deleteIfExists(verified); }
         }
         var object = storage.upload(upload, folder, token);
-        if (!upload.equals(archive) && !storage.canUseBase(baseRef, folder, token)) throw new IOException("Checkpoint base unavailable");
+        if (!upload.equals(archive) && !storage.canUseBase(checkpointBase, folder, token)) throw new IOException("Checkpoint base unavailable");
         if (!gate.mayContinueHosting(acquisition.attempt(), nanos.getAsLong(), millis.getAsLong())) throw new IOException("Host lease expired during checkpoint");
         var operation = new CheckpointRecord(acquisition.world(), java.util.UUID.randomUUID().toString(), acquisition.principal(),
                 acquisition.lease(), acquisition.epoch(), acquisition.generation(), object, upload.equals(archive) ? "full" : "delta", 0);
         // Same ID and content make a lost response safe to retry.
-        try { return authority.checkpoint(operation, token); }
-        catch (IOException first) { return authority.checkpoint(operation, token); }
+        try { return authority.checkpoint(operation, token, baseId); }
+        catch (IOException first) { return authority.checkpoint(operation, token, baseId); }
     }
 
     /** A verified, committed full checkpoint can become the next delta base. */
     public Path adoptCheckpointBase(CheckpointRecord checkpoint, Path archive) throws IOException {
         if (checkpoint == null || !"full".equals(checkpoint.kind()) || archive == null || !Files.isRegularFile(archive))
             throw new IOException("Invalid checkpoint base");
-        Path previous = baseArchive;
-        baseRef = checkpoint.object(); baseArchive = archive;
+        // Final handoffs use the original lease base. Their history has a separate retention policy.
+        Path previous = checkpointBaseArchive;
+        checkpointBaseRef = checkpoint.object(); checkpointBaseArchive = archive;
         return previous;
     }
 

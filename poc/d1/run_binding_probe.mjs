@@ -57,6 +57,7 @@ try {
   await db.batch(schema.map(statement => db.prepare(statement)));
   await db.batch(recoveryMigration.map(statement => db.prepare(statement)));
   await db.batch(checkpointMigration.map(statement => db.prepare(statement)));
+  await db.batch(load('checkpoint_dependencies_migration.sql').trim().split(/\r?\n(?=ALTER TABLE |CREATE |DROP TRIGGER )/).map(statement => db.prepare(statement)));
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('recovery-world').run();
   const recoveryGrant = await db.prepare(acquire).bind('recovery-world', 'owner', 'lease', 120).first();
   const recover = (owner, operation, generation = 0) => db.prepare(recoverStopped)
@@ -73,7 +74,7 @@ try {
   const successor = await db.prepare(acquire).bind('recovery-world', 'next', 'next-lease', 120).first();
   check(successor.epoch === recoveryGrant.epoch + 1 && successor.generation === 1, 'successor did not receive recovered generation');
   check((await recover('owner', 'late')).results.length === 0, 'old recovery affected successor');
-  await db.prepare(checkpoint).bind('recovery-world', 'protected', 'next', 'next-lease', successor.epoch, 1, 'a'.repeat(64), 'object', 42, 'delta').run();
+  await db.prepare(checkpoint).bind('recovery-world', 'protected', 'next', 'next-lease', successor.epoch, 1, 'a'.repeat(64), 'object', 42, 'delta', 0, '').run();
   await db.prepare(checkpointDelete).bind('recovery-world', 'protected', 'object', 'a'.repeat(64), 42).run();
   check((await db.prepare(checkpointStatus).bind('recovery-world', 'protected').first()) != null, 'checkpoint referenced by shared head was deleted');
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('recovery-rollback').run();
@@ -226,7 +227,7 @@ try {
   check((await (await request('checkpoint-history', { world: 'api-world' })).json()).checkpoints.length === 1, 'checkpoint history mismatch');
   for (let i = 0; i < 40; i++) {
     await db.prepare(checkpoint).bind('api-world', `list-${i}`, 'api-owner', 'api-lease', grant.epoch, 0,
-      'a'.repeat(64), `file-${i}`, 42, i < 4 ? 'full' : 'delta').run();
+      'a'.repeat(64), `file-${i}`, 42, i < 4 ? 'full' : 'delta', 0, '').run();
   }
   const checkpointRows = (await db.prepare(checkpointHistory).bind('api-world').all()).results;
   check(checkpointRows.length === 32 && checkpointRows.filter(row => row.kind === 'full').length === 4,

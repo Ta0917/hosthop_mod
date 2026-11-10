@@ -99,7 +99,10 @@ neoForge {
                     systemProperty 'hosthop.checkpointSmoke', 'true'
                     systemProperty 'hosthop.fakeRelaySmoke', 'true'
                 }
-                if (project.hasProperty('hosthopCheckpointTimerSmoke')) systemProperty 'hosthop.checkpointTimerSmoke', 'true'
+                if (project.hasProperty('hosthopCheckpointTimerSmoke')) {
+                    systemProperty 'hosthop.checkpointTimerSmoke', 'true'
+                    if (project.property('hosthopCheckpointTimerSmoke') == 'production') systemProperty 'hosthop.checkpointTimerUseProduction', 'true'
+                }
                 if (project.hasProperty('hosthopForceFullCheckpointSmoke')) systemProperty 'hosthop.forceFullCheckpointSmoke', 'true'
                 if (project.hasProperty('hosthopRealSmoke')) {
                     systemProperty 'hosthop.realSmoke', 'true'

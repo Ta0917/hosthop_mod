@@ -49,6 +49,9 @@ ${stop_mixin}
 [[mixins]]
 config="hosthop.mixins.json"
 
+[[mixins]]
+config="hosthop.checkpoint.mixins.json"
+
 # The [[mixins]] block allows you to declare your mixin config to FML so that it gets loaded.
 #[[mixins]]
 #config="${mod_id}.mixins.json"

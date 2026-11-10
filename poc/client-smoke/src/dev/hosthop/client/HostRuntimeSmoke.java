@@ -28,11 +28,19 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.GameType;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import dev.hosthop.relay.E4mcRelayBridge;
 
 /** Opt-in real integrated-server handoff check using isolated data and local fake storage. */
@@ -47,8 +55,21 @@ public final class HostRuntimeSmoke {
     private static final Object FAKE_RELAY = new Object();
     private static boolean fakeRelayStarted;
     private static boolean firstCheckpoint, secondCheckpoint;
+    private static String restoredCheckpoint;
+    private static BlockPos checkpointMarker;
+    private static long previousTick;
+    private static volatile long maxCheckpointTickGap;
+
+    @SubscribeEvent public static void serverTick(ServerTickEvent.Pre event) {
+        if (!Boolean.getBoolean("hosthop.checkpointSmoke")) return;
+        long now = System.nanoTime();
+        if (previousTick != 0 && HostWorldRuntime.checkpointActive())
+            maxCheckpointTickGap = Math.max(maxCheckpointTickGap, now - previousTick);
+        previousTick = now;
+    }
 
     @SubscribeEvent public static void serverStopped(ServerStoppedEvent event) {
+        previousTick = 0;
         if (fakeRelayStarted) { E4mcRelayBridge.end(FAKE_RELAY); fakeRelayStarted = false; }
     }
 
@@ -58,7 +79,9 @@ public final class HostRuntimeSmoke {
         if (!Boolean.getBoolean("hosthop.hostSmoke") || stage == 99) return;
         var minecraft = Minecraft.getInstance();
         try {
-            if (System.nanoTime() - START > TimeUnit.MINUTES.toNanos(3)) throw new IllegalStateException("host smoke timed out at stage " + stage);
+            int timeoutMinutes = Boolean.getBoolean("hosthop.checkpointTimerUseProduction") ? 15
+                    : Boolean.getBoolean("hosthop.checkpointSmoke") ? 8 : 3;
+            if (System.nanoTime() - START > TimeUnit.MINUTES.toNanos(timeoutMinutes)) throw new IllegalStateException("host smoke timed out at stage " + stage);
             if (Boolean.getBoolean("hosthop.fakeRelaySmoke") && (stage == 2 || stage == 5) && !fakeRelayStarted
                     && minecraft.getSingleplayerServer() != null && minecraft.player != null) {
                 fakeRelayStarted = true;
@@ -83,9 +106,28 @@ public final class HostRuntimeSmoke {
                 block = new CompletableFuture<>();
                 server.execute(() -> {
                     try {
-                        server.overworld().getChunk(0, 0);
-                        if (Boolean.getBoolean("hosthop.verifyCloseSmoke")) block.complete(server.overworld().getBlockState(MARKER).is(Blocks.DIAMOND_BLOCK));
-                        else { server.overworld().setBlock(MARKER, Blocks.DIAMOND_BLOCK.defaultBlockState(), 3); block.complete(true); }
+                        if (Boolean.getBoolean("hosthop.verifyCloseSmoke")) {
+                            server.overworld().getChunk(0, 0);
+                            block.complete(server.overworld().getBlockState(MARKER).is(Blocks.DIAMOND_BLOCK));
+                        } else {
+                            var level = server.overworld();
+                            if (Boolean.getBoolean("hosthop.checkpointSmoke")) {
+                                var player = server.getPlayerList().getPlayers().getFirst();
+                                player.setGameMode(GameType.CREATIVE);
+                                checkpointMarker = player.blockPosition().offset(2, 4, 0);
+                                level.setBlock(checkpointMarker, Blocks.EMERALD_BLOCK.defaultBlockState(), 3);
+                                var stand = EntityTypes.ARMOR_STAND.create(level, EntitySpawnReason.COMMAND);
+                                stand.setPos(checkpointMarker.getX() + 0.5, checkpointMarker.getY() + 1, checkpointMarker.getZ() + 0.5);
+                                stand.setNoGravity(true);
+                                stand.setCustomName(Component.literal("checkpoint-marker"));
+                                level.addFreshEntity(stand);
+                                player.getInventory().setItem(8, new ItemStack(Items.EMERALD, 31));
+                            } else {
+                                level.getChunk(0, 0);
+                                level.setBlock(MARKER, Blocks.DIAMOND_BLOCK.defaultBlockState(), 3);
+                            }
+                            block.complete(true);
+                        }
                     }
                     catch (Throwable failure) { block.completeExceptionally(failure); }
                 });
@@ -141,7 +183,12 @@ public final class HostRuntimeSmoke {
                 if (server.getWorldData().getSinglePlayerUUID() != null) throw new IllegalStateException("previous host identity was retained after restore");
                 block = new CompletableFuture<>();
                 server.execute(() -> {
-                    try { server.overworld().getChunk(0, 0); block.complete(server.overworld().getBlockState(MARKER).is(Blocks.DIAMOND_BLOCK)); }
+                    try {
+                        var marker = checkpointMarker == null ? MARKER : checkpointMarker;
+                        var expected = checkpointMarker == null ? Blocks.DIAMOND_BLOCK : Blocks.EMERALD_BLOCK;
+                        server.overworld().getChunk(marker.getX() >> 4, marker.getZ() >> 4);
+                        block.complete(server.overworld().getBlockState(marker).is(expected));
+                    }
                     catch (Throwable failure) { block.completeExceptionally(failure); }
                 });
                 stage = 6;
@@ -162,8 +209,11 @@ public final class HostRuntimeSmoke {
                     Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-expired-recovery-result.txt"), "verified");
                 if (Boolean.getBoolean("hosthop.uncleanRecoverySmoke"))
                     Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-unclean-recovery-result.txt"), "verified");
-                if (Boolean.getBoolean("hosthop.checkpointSmoke"))
-                    Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-checkpoint-result.txt"), "verified");
+                if (restoredCheckpoint != null) {
+                    stage = 10;
+                    minecraft.createWorldOpenFlows().openWorld(restoredCheckpoint, () -> { throw new IllegalStateException("checkpoint open cancelled"); });
+                    return;
+                }
                 System.out.println("HOSTHOP_HOST_SMOKE two integrated hosts restored world change=true");
                 finish(minecraft);
             } else if ((stage == 8 || stage == 9) && !HostWorldRuntime.checkpointActive()) {
@@ -174,10 +224,35 @@ public final class HostRuntimeSmoke {
                 if (stage == 9) {
                     if (!checkpoints.get(0).kind().equals("delta")) throw new IllegalStateException("second checkpoint not a delta");
                     String access = context.credentials().access().accessToken();
-                    String name = dev.hosthop.world.BackupRestore.restore(checkpoints.get(0), context.storage(), access, minecraft.gameDirectory.toPath());
-                    if (!Files.isRegularFile(minecraft.gameDirectory.toPath().resolve("saves").resolve(name).resolve("level.dat"))) throw new IllegalStateException("checkpoint restore failed");
+                    restoredCheckpoint = dev.hosthop.world.BackupRestore.restore(checkpoints.get(0), context.storage(), access, minecraft.gameDirectory.toPath());
                 }
                 stage = stage == 8 ? 3 : 6;
+            } else if (stage == 10 && minecraft.player != null && minecraft.getSingleplayerServer() != null) {
+                var server = minecraft.getSingleplayerServer();
+                block = new CompletableFuture<>();
+                server.execute(() -> {
+                    try {
+                        var level = server.overworld();
+                        var item = server.getPlayerList().getPlayers().getFirst().getInventory().getItem(8);
+                        var entities = level.getEntities(EntityTypes.ARMOR_STAND, new AABB(checkpointMarker).inflate(3),
+                                stand -> stand.hasCustomName() && stand.getCustomName().getString().equals("checkpoint-marker"));
+                        if (!level.getBlockState(checkpointMarker).is(Blocks.EMERALD_BLOCK))
+                            throw new IllegalStateException("checkpoint block missing");
+                        if (entities.isEmpty()) throw new IllegalStateException("checkpoint entity missing");
+                        if (!item.is(Items.EMERALD) || item.getCount() != 31)
+                            throw new IllegalStateException("checkpoint inventory missing");
+                        block.complete(true);
+                    } catch (Throwable failure) { block.completeExceptionally(failure); }
+                });
+                stage = 11;
+            } else if (stage == 11 && block.isDone()) {
+                if (!block.join()) throw new IllegalStateException("checkpoint block, entity, or player marker missing");
+                long gap = TimeUnit.NANOSECONDS.toMillis(maxCheckpointTickGap);
+                Files.writeString(minecraft.gameDirectory.toPath().resolve("hosthop-checkpoint-result.txt"),
+                        "restored block, entity and inventory; max checkpoint tick gap=" + gap + " ms");
+                System.out.println("HOSTHOP_CHECKPOINT_SMOKE restored block, entity and inventory; max tick gap=" + gap + " ms");
+                minecraft.disconnect(new TitleScreen(), false);
+                finish(minecraft);
             } else if ((stage == 2 || stage == 5) && !HostWorldRuntime.active()) {
                 throw new IllegalStateException("host startup failed: " + HostWorldRuntime.lastStatus());
             }

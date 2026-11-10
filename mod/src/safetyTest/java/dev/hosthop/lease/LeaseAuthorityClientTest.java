@@ -54,8 +54,12 @@ public final class LeaseAuthorityClientTest {
         check(client.commitStatus(publication).equals(publication));
         var checkpoint = new CheckpointRecord("world", "checkpoint", "owner", "lease", 4, 3,
                 new dev.hosthop.storage.GoogleDriveSnapshotStore.ObjectRef("file-id", digest, 42), "delta", 0);
-        reply.set(new LeaseAuthorityClient.Reply(200, "{\"world_id\":\"world\",\"checkpoint_id\":\"checkpoint\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"generation\":3,\"digest\":\"" + digest + "\",\"object_id\":\"file-id\",\"object_size\":42,\"kind\":\"delta\",\"created_at\":100}"));
+        String checkpointReceipt = "{\"world_id\":\"world\",\"checkpoint_id\":\"checkpoint\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"generation\":3,\"digest\":\"" + digest + "\",\"object_id\":\"file-id\",\"object_size\":42,\"kind\":\"delta\",\"created_at\":100}";
+        reply.set(new LeaseAuthorityClient.Reply(200, checkpointReceipt));
         check(client.checkpoint(checkpoint, "drive-token").createdAt() == 100);
+        reply.set(new LeaseAuthorityClient.Reply(200, checkpointReceipt.replace("}", ",\"managed\":1,\"base_object_id\":\"base\"}")));
+        check(client.checkpoint(checkpoint, "drive-token", "base").createdAt() == 100);
+        expectFailure(() -> client.checkpoint(checkpoint, "drive-token", "other-base"));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"created_at\":100,\"server_now\":86500}"));
         check(client.fullCheckpointDue("world"));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"created_at\":100,\"server_now\":86499}"));

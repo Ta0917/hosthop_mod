@@ -82,7 +82,10 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
           || typeof body.digest !== 'string' || !/^[0-9a-f]{64}$/.test(body.digest)
           || typeof body.fileId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(body.fileId)
           || !Number.isSafeInteger(body.size) || body.size < 1 || body.size > 68_719_476_736
-          || !['full', 'delta'].includes(body.kind))) return json({ error: 'invalid request' }, 400);
+          || !['full', 'delta'].includes(body.kind)
+          || (body.baseFileId !== undefined && (body.kind === 'full' ? body.baseFileId !== ''
+            : typeof body.baseFileId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(body.baseFileId)))))
+        return json({ error: 'invalid request' }, 400);
       if (['/checkpoint-delete', '/checkpoint-prune-delete', '/checkpoint-trash-done'].includes(route) && (!identifier(body.checkpoint) || typeof body.digest !== 'string' || !/^[0-9a-f]{64}$/.test(body.digest)
           || typeof body.fileId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(body.fileId)
           || !Number.isSafeInteger(body.size) || body.size < 1 || body.size > 68_719_476_736)) return json({ error: 'invalid request' }, 400);
@@ -102,11 +105,11 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
         return json({ checkpoints: rows.results });
       }
       if (route === '/checkpoint-prune') {
-        const rows = await env.DB.prepare(sql.checkpointPrune).bind(body.world, member.owner).all();
+        const rows = await env.DB.prepare(sql.checkpointPrune).bind(body.world, member.owner, body.includeFull === true ? 1 : 0).all();
         return json({ checkpoints: rows.results });
       }
       if (route === '/checkpoint-trash-pending') {
-        const rows = await env.DB.prepare(sql.checkpointTrashPending).bind(body.world, member.owner).all();
+        const rows = await env.DB.prepare(sql.checkpointTrashPending).bind(body.world, member.owner, body.includeFull === true ? 1 : 0).all();
         return json({ checkpoints: rows.results });
       }
       if (route === '/checkpoint-trash-done') {
@@ -134,10 +137,12 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
         return matches(receipt) ? json(receipt) : json({ error: 'protected checkpoint' }, 409);
       }
       if (route === '/checkpoint' || route === '/checkpoint-status') {
+        const managed = body.baseFileId === undefined ? 0 : 1;
+        const baseId = body.baseFileId ?? '';
         const find = () => env.DB.prepare(sql.checkpointStatus).bind(body.world, body.checkpoint).first();
         const matches = row => row && row.owner === member.owner && row.lease_id === body.lease && row.epoch === body.epoch
           && row.generation === body.generation && row.digest === body.digest && row.object_id === body.fileId
-          && row.object_size === body.size && row.kind === body.kind;
+          && row.object_size === body.size && row.kind === body.kind && row.managed === managed && row.base_object_id === baseId;
         let receipt = await find();
         if (receipt) return matches(receipt) ? json(receipt) : json({ error: 'checkpoint conflict' }, 409);
         if (route === '/checkpoint-status') return json({ error: 'unknown checkpoint' }, 404);
@@ -148,7 +153,7 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
         if (!await verifyObject({ folder: world.folder, fileId: body.fileId, digest: body.digest, size: body.size, accessToken: body.driveToken }))
           return json({ error: 'snapshot verification failed' }, 422);
         await env.DB.prepare(sql.checkpoint).bind(body.world, body.checkpoint, member.owner, body.lease,
-          body.epoch, body.generation, body.digest, body.fileId, body.size, body.kind).run();
+          body.epoch, body.generation, body.digest, body.fileId, body.size, body.kind, managed, baseId).run();
         receipt = await find();
         return matches(receipt) ? json(receipt) : json({ error: 'lease conflict' }, 409);
       }

@@ -10,6 +10,11 @@ import lease_model
 
 SCHEMA = (Path(__file__).parent / "d1" / "schema.sql").read_text(encoding="utf-8")
 CHECKPOINT_SCHEMA = (Path(__file__).parent / "d1" / "checkpoint_migration.sql").read_text(encoding="utf-8")
+CHECKPOINT_DEPENDENCIES = (Path(__file__).parent / "d1" / "checkpoint_dependencies_migration.sql").read_text(encoding="utf-8")
+CHECKPOINT = (Path(__file__).parent / "d1" / "checkpoint.sql").read_text(encoding="utf-8")
+CHECKPOINT_DELETE = (Path(__file__).parent / "d1" / "checkpoint_delete.sql").read_text(encoding="utf-8")
+CHECKPOINT_PRUNE = (Path(__file__).parent / "d1" / "checkpoint_prune.sql").read_text(encoding="utf-8")
+CHECKPOINT_PRUNE_DELETE = (Path(__file__).parent / "d1" / "checkpoint_prune_delete.sql").read_text(encoding="utf-8")
 COMMIT = (Path(__file__).parent / "d1" / "commit.sql").read_text(encoding="utf-8")
 ACQUIRE = (Path(__file__).parent / "d1" / "acquire.sql").read_text(encoding="utf-8")
 ACQUIRE_STATUS = (Path(__file__).parent / "d1" / "acquire_status.sql").read_text(encoding="utf-8")
@@ -25,6 +30,7 @@ class D1SqlTest(unittest.TestCase):
         with lease_model.connection(self.db) as c:
             c.executescript(SCHEMA)
             c.executescript(CHECKPOINT_SCHEMA)
+            c.executescript(CHECKPOINT_DEPENDENCIES)
             c.execute("INSERT INTO worlds (id, owner, lease_id, epoch, expires) VALUES (?, ?, ?, ?, ?)", ("w", "a", "lease-a", 1, int(time.time()) + 300))
 
     def attempt(self, operation_id, digest="hash-a", owner="a", lease_id="lease-a", epoch=1, generation=0):
@@ -152,6 +158,36 @@ class D1SqlTest(unittest.TestCase):
         with lease_model.connection(self.db) as c:
             self.assertEqual(0, c.execute("SELECT count(*) FROM committed_operations").fetchone()[0])
             self.assertEqual((0, None), c.execute("SELECT generation, digest FROM worlds WHERE id='w'").fetchone())
+
+    def test_full_checkpoint_prune_fences_old_clients_and_live_dependencies(self):
+        digest = "a" * 64
+        with lease_model.connection(self.db) as c:
+            def publish(checkpoint, kind, base="", managed=1, lease="lease-a"):
+                return c.execute(CHECKPOINT, ("w", checkpoint, "a", lease, 1, 0, digest,
+                                              "object-" + checkpoint, 42, kind, managed, base)).fetchone()
+
+            def prune(checkpoint):
+                c.execute(CHECKPOINT_PRUNE_DELETE, ("w", checkpoint, "object-" + checkpoint, digest, 42, 4, "a"))
+                return c.execute("SELECT kind FROM checkpoint_deletions WHERE checkpoint_id=?", (checkpoint,)).fetchone()
+
+            self.assertIsNotNone(publish("legacy", "full", managed=0))
+            self.assertIsNotNone(publish("legacy-delta", "delta", managed=0))
+            for number in range(6):
+                self.assertIsNotNone(publish(f"full-{number}", "full"))
+            self.assertIsNone(prune("full-1"))  # Current lease may still adopt it.
+            c.execute("UPDATE worlds SET lease_id='lease-b' WHERE id='w'")
+            self.assertIsNone(prune("full-1"))  # A legacy delta in the original lease may depend on it.
+            c.execute(CHECKPOINT_DELETE, ("w", "legacy-delta", "object-legacy-delta", digest, 42))
+            self.assertIsNotNone(publish("tracked-delta", "delta", "object-full-0", lease="lease-b"))
+            self.assertIsNone(prune("legacy"))
+            self.assertIsNone(prune("full-5"))  # Four most recent fulls are retained.
+            self.assertIsNone(prune("full-0"))
+            self.assertEqual([], c.execute(CHECKPOINT_PRUNE, ("w", "a", 0)).fetchall())
+            self.assertEqual(["full-1"], [row[0] for row in c.execute(CHECKPOINT_PRUNE, ("w", "a", 1))])
+            self.assertEqual(("full",), prune("full-1"))
+            self.assertIsNone(publish("too-late", "delta", "object-full-1", lease="lease-b"))
+            c.execute(CHECKPOINT_DELETE, ("w", "tracked-delta", "object-tracked-delta", digest, 42))
+            self.assertEqual(("full",), prune("full-0"))
 
 
 if __name__ == "__main__":

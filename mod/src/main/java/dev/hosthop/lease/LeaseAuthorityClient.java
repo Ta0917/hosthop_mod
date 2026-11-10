@@ -279,21 +279,32 @@ public final class LeaseAuthorityClient {
 
     /** Record a verified snapshot without advancing or releasing the active lease. */
     public CheckpointRecord checkpoint(CheckpointRecord operation, String driveToken) throws IOException, InterruptedException {
+        return checkpoint(operation, driveToken, null);
+    }
+
+    /** An empty base identifies a managed full; null identifies an older client without dependency data. */
+    public CheckpointRecord checkpoint(CheckpointRecord operation, String driveToken, String baseId) throws IOException, InterruptedException {
         if (operation == null || driveToken == null || driveToken.isBlank() || driveToken.length() > 2048
                 || driveToken.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException("Invalid checkpoint");
+        if (baseId != null && !("full".equals(operation.kind()) ? baseId.isEmpty() : baseId.matches("[A-Za-z0-9_-]{1,200}")))
+            throw new IllegalArgumentException("Invalid checkpoint base");
         var body = new JsonObject();
         body.addProperty("world", operation.world()); body.addProperty("checkpoint", operation.id());
         body.addProperty("lease", operation.lease()); body.addProperty("epoch", operation.epoch());
         body.addProperty("generation", operation.generation()); body.addProperty("digest", operation.object().sha256());
         body.addProperty("fileId", operation.object().fileId()); body.addProperty("size", operation.object().size());
         body.addProperty("kind", operation.kind()); body.addProperty("driveToken", driveToken);
+        if (baseId != null) body.addProperty("baseFileId", baseId);
         var fields = post("checkpoint", body);
         var s = fields.strings(); var n = fields.numbers();
         if (!operation.world().equals(s.get("world_id")) || !operation.id().equals(s.get("checkpoint_id"))
                 || !operation.owner().equals(s.get("owner")) || !operation.lease().equals(s.get("lease_id"))
                 || !operation.object().fileId().equals(s.get("object_id")) || !operation.object().sha256().equals(s.get("digest"))
                 || !operation.kind().equals(s.get("kind")) || operation.epoch() != required(n, "epoch")
-                || operation.generation() != required(n, "generation") || operation.object().size() != required(n, "object_size"))
+                || operation.generation() != required(n, "generation") || operation.object().size() != required(n, "object_size")
+                || n.containsKey("managed") != s.containsKey("base_object_id")
+                || (n.containsKey("managed") && (n.get("managed") != (baseId == null ? 0 : 1)
+                    || !java.util.Objects.equals(baseId == null ? "" : baseId, s.get("base_object_id")))))
             throw new IOException("Checkpoint receipt mismatch");
         return new CheckpointRecord(operation.world(), operation.id(), operation.owner(), operation.lease(), operation.epoch(),
                 operation.generation(), operation.object(), operation.kind(), required(n, "created_at"));
@@ -321,7 +332,7 @@ public final class LeaseAuthorityClient {
     }
 
     public void checkpointTrashDone(String world, Checkpoint checkpoint) throws IOException, InterruptedException {
-        if (world == null || !world.matches(ID) || checkpoint == null || !"delta".equals(checkpoint.kind())) throw new IllegalArgumentException("Invalid checkpoint");
+        if (world == null || !world.matches(ID) || checkpoint == null) throw new IllegalArgumentException("Invalid checkpoint");
         var body = new JsonObject(); body.addProperty("world", world); body.addProperty("checkpoint", checkpoint.id());
         body.addProperty("fileId", checkpoint.object().fileId()); body.addProperty("digest", checkpoint.object().sha256()); body.addProperty("size", checkpoint.object().size());
         var fields = post("checkpoint-trash-done", body);
@@ -332,9 +343,12 @@ public final class LeaseAuthorityClient {
 
     private List<Checkpoint> checkpoints(String world, String route) throws IOException, InterruptedException {
         if (world == null || !world.matches(ID)) throw new IllegalArgumentException("Invalid world");
+        var body = new JsonObject();
+        body.addProperty("world", world);
+        if (!route.equals("checkpoint-history")) body.addProperty("includeFull", true);
         var request = HttpRequest.newBuilder(base.resolve("/" + route)).timeout(Duration.ofSeconds(10))
                 .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString("{\"world\":\"" + world + "\"}", StandardCharsets.UTF_8)).build();
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8)).build();
         var reply = exchange.send(request);
         if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES) throw new IOException("Checkpoint history unavailable");
         try {
@@ -384,7 +398,8 @@ public final class LeaseAuthorityClient {
     }
 
     private void deleteCheckpoint(String world, Checkpoint checkpoint, int keep) throws IOException, InterruptedException {
-        if (world == null || !world.matches(ID) || checkpoint == null || !"delta".equals(checkpoint.kind())) throw new IllegalArgumentException("Protected checkpoint");
+        if (world == null || !world.matches(ID) || checkpoint == null || (keep == 0 && !"delta".equals(checkpoint.kind())))
+            throw new IllegalArgumentException("Protected checkpoint");
         var body = new JsonObject(); body.addProperty("world", world); body.addProperty("checkpoint", checkpoint.id());
         body.addProperty("fileId", checkpoint.object().fileId()); body.addProperty("digest", checkpoint.object().sha256()); body.addProperty("size", checkpoint.object().size());
         if (keep != 0) body.addProperty("keep", keep);
@@ -514,12 +529,14 @@ public final class LeaseAuthorityClient {
                 if (name.equals("epoch") || name.equals("generation") || name.equals("base_generation")
                         || name.equals("duration_seconds") || name.equals("active") || name.equals("held") || name.equals("endpoint_revision")
                         || name.equals("previous_generation") || name.equals("result_generation") || name.equals("object_size")
-                        || name.equals("server_now") || name.equals("expires") || name.equals("created_at") || name.equals("keep_delta")) {
+                        || name.equals("server_now") || name.equals("expires") || name.equals("created_at") || name.equals("keep_delta")
+                        || name.equals("managed")) {
                     if (reader.peek() != JsonToken.NUMBER) throw new IOException("Invalid response field");
                     String value = reader.nextString();
                     if (!value.matches("-?(0|[1-9][0-9]*)")) throw new IOException("Invalid response number");
                     values.put(name, Long.parseLong(value));
-                } else if (java.util.Set.of("owner", "endpoint", "world_id", "operation_id", "lease_id", "digest", "object_id", "checkpoint_id", "kind").contains(name)) {
+                } else if (java.util.Set.of("owner", "endpoint", "world_id", "operation_id", "lease_id", "digest",
+                        "object_id", "checkpoint_id", "kind", "base_object_id").contains(name)) {
                     if (name.equals("endpoint") && reader.peek() == JsonToken.NULL) { reader.nextNull(); continue; }
                     if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid response text");
                     strings.put(name, reader.nextString());

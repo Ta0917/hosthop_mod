@@ -1,0 +1,9 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.hosthop.relay.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["RegionFileSnapshotMixin", "SavedDataCheckpointMixin", "RegionWorkerSnapshotMixin",
+    "ChunkMapCheckpointMixin", "EntityStorageCheckpointMixin", "CheckpointAutosaveAccessor"],
+  "injectors": { "defaultRequire": 1 }
+}
