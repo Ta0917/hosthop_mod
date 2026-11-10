@@ -34,10 +34,12 @@ public final class LeaseAuthorityClientTest {
         check(endpoint.epoch() == 4 && endpoint.revision() == 7 && endpoint.address().equals("example.us.e4mc.link"));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"endpoint\":\"example.evil.invalid\",\"endpoint_revision\":7,\"epoch\":4,\"generation\":3,\"server_now\":100,\"expires\":130}"));
         expectFailure(() -> client.endpoint("world", 2));
-        reply.set(new LeaseAuthorityClient.Reply(200, "{\"held\":0,\"endpoint\":null,\"endpoint_revision\":0,\"epoch\":0,\"generation\":0,\"server_now\":100,\"expires\":0}"));
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"held\":0,\"maintenance\":0,\"endpoint\":null,\"endpoint_revision\":0,\"epoch\":0,\"generation\":0,\"server_now\":100,\"expires\":0}"));
         check(!client.hostStatus("world", 2).held());
-        reply.set(new LeaseAuthorityClient.Reply(200, "{\"held\":1,\"endpoint\":null,\"endpoint_revision\":1,\"epoch\":1,\"generation\":0,\"server_now\":100,\"expires\":99}"));
-        check(client.hostStatus("world", 2).held() && client.hostStatus("world", 2).endpoint() == null);
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"held\":1,\"maintenance\":0,\"endpoint\":null,\"endpoint_revision\":1,\"epoch\":1,\"generation\":0,\"server_now\":100,\"expires\":99}"));
+        check(client.hostStatus("world", 2).held() && client.hostStatus("world", 2).recoveryRequired() && client.hostStatus("world", 2).endpoint() == null);
+        reply.set(new LeaseAuthorityClient.Reply(200, "{\"held\":0,\"maintenance\":1,\"endpoint\":null,\"endpoint_revision\":1,\"epoch\":1,\"generation\":0,\"server_now\":100,\"expires\":0}"));
+        check(client.hostStatus("world", 2).maintenance() && !client.hostStatus("world", 2).recoveryRequired());
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"endpoint_revision\":7,\"endpoint\":null,\"server_now\":100,\"expires\":130}"));
         check(client.endpointRevision("world", "lease", 4, 2).revision() == 7);
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"epoch\":4,\"endpoint_revision\":8,\"endpoint\":\"example.e4mc.link\",\"server_now\":100,\"expires\":130}"));

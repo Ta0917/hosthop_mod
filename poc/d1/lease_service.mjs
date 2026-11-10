@@ -47,7 +47,7 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       if (request.method !== 'POST') return json({ error: 'not found' }, 404);
       const route = new URL(request.url).pathname;
       if (!['/acquire', '/renew', '/acquire-status', '/endpoint-update', '/endpoint-status', '/endpoint-revision',
-        '/commit', '/commit-status', '/recover-stopped', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/cancel-acquisition', '/history', '/checkpoint', '/checkpoint-status', '/checkpoint-history', '/checkpoint-full', '/checkpoint-delete', '/checkpoint-retention', '/checkpoint-retention-set', '/checkpoint-prune', '/checkpoint-prune-delete', '/checkpoint-trash-pending', '/checkpoint-trash-done'].includes(route))
+        '/commit', '/commit-status', '/recover-stopped', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/maintenance-set', '/cancel-acquisition', '/history', '/checkpoint', '/checkpoint-status', '/checkpoint-history', '/checkpoint-full', '/checkpoint-delete', '/checkpoint-retention', '/checkpoint-retention-set', '/checkpoint-prune', '/checkpoint-prune-delete', '/checkpoint-trash-pending', '/checkpoint-trash-done'].includes(route))
         return json({ error: 'not found' }, 404);
       const auth = request.headers.get('Authorization') || '';
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -56,7 +56,8 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       try { body = await readJson(request); } catch { return json({ error: 'invalid request' }, 400); }
       if (!body || Array.isArray(body) || typeof body !== 'object' || !identifier(body.world))
         return json({ error: 'invalid request' }, 400);
-      if (!['/endpoint-status', '/snapshot-status', '/host-status', '/history', '/checkpoint-history', '/checkpoint-full', '/checkpoint-delete', '/checkpoint-retention', '/checkpoint-retention-set', '/checkpoint-prune', '/checkpoint-prune-delete', '/checkpoint-trash-pending', '/checkpoint-trash-done'].includes(route) && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
+      if (!['/endpoint-status', '/snapshot-status', '/host-status', '/maintenance-set', '/history', '/checkpoint-history', '/checkpoint-full', '/checkpoint-delete', '/checkpoint-retention', '/checkpoint-retention-set', '/checkpoint-prune', '/checkpoint-prune-delete', '/checkpoint-trash-pending', '/checkpoint-trash-done'].includes(route) && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
+      if (route === '/maintenance-set' && typeof body.enabled !== 'boolean') return json({ error: 'invalid request' }, 400);
       if (['/acquire', '/renew', '/acquire-status'].includes(route)
           && (!Number.isSafeInteger(body.duration) || body.duration < 1 || body.duration > 300))
         return json({ error: 'invalid request' }, 400);
@@ -177,6 +178,16 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       if (route === '/host-status') {
         const status = await env.DB.prepare(sql.hostStatus).bind(body.world).first();
         return status ? json(status) : json({ error: 'unknown world' }, 404);
+      }
+      if (route === '/maintenance-set') {
+        // A held or expired lease must be resolved independently, never cleared here.
+        const row = await env.DB.prepare(`INSERT INTO world_maintenance(world_id, enabled, revision)
+          SELECT id, ?2, 1 FROM worlds WHERE id = ?1 AND owner IS NULL AND lease_id IS NULL
+          ON CONFLICT(world_id) DO UPDATE SET enabled=excluded.enabled,
+            revision=world_maintenance.revision + (world_maintenance.enabled != excluded.enabled)
+          WHERE EXISTS (SELECT 1 FROM worlds WHERE id=?1 AND owner IS NULL AND lease_id IS NULL)
+          RETURNING enabled, revision`).bind(body.world, body.enabled ? 1 : 0).first();
+        return row ? json(row) : json({ error: 'host or recovery pending' }, 409);
       }
       if (route === '/abort') {
         const find = () => env.DB.prepare(sql.abortStatus).bind(body.world, body.lease).first();

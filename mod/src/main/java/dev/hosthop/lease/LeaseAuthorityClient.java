@@ -51,7 +51,7 @@ public final class LeaseAuthorityClient {
     public record Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object) {}
     public record Checkpoint(String id, long generation, GoogleDriveSnapshotStore.ObjectRef object, String kind, long createdAt) {}
     public record EndpointLease(long epoch, long revision, String address, ConservativeLeaseDeadline deadline) {}
-    public record HostStatus(boolean held, Endpoint endpoint) {}
+    public record HostStatus(boolean held, boolean maintenance, boolean recoveryRequired, Endpoint endpoint) {}
     @FunctionalInterface public interface Exchange { Reply send(HttpRequest request) throws IOException, InterruptedException; }
 
     public LeaseAuthorityClient(URI base, String token) {
@@ -122,19 +122,27 @@ public final class LeaseAuthorityClient {
         var body = new JsonObject(); body.addProperty("world", world);
         long startNanos = nanos.getAsLong(), startMillis = millis.getAsLong();
         var fields = post("host-status", body);
-        long held = required(fields.numbers(), "held"), epoch = required(fields.numbers(), "epoch");
+        long held = required(fields.numbers(), "held"), maintenance = required(fields.numbers(), "maintenance"), epoch = required(fields.numbers(), "epoch");
         long generation = required(fields.numbers(), "generation"), revision = required(fields.numbers(), "endpoint_revision");
         long serverNow = required(fields.numbers(), "server_now"), expires = required(fields.numbers(), "expires");
-        if ((held != 0 && held != 1) || epoch < 0 || generation < 0 || revision < 0 || serverNow < 0)
+        if ((held != 0 && held != 1) || (maintenance != 0 && maintenance != 1) || epoch < 0 || generation < 0 || revision < 0 || serverNow < 0)
             throw new IOException("Invalid host status");
         String address = fields.strings().get("endpoint");
-        if (address == null) return new HostStatus(held == 1, null);
+        if (address == null) return new HostStatus(held == 1, maintenance == 1, held == 1 && expires <= serverNow, null);
         if (held != 1 || epoch < 1 || !RelayAddress.valid(address)) throw new IOException("Invalid host endpoint");
         try {
             var deadline = ConservativeLeaseDeadline.fromGrant(startNanos, startMillis, serverNow, expires, marginSeconds);
-            if (!deadline.isUsable(nanos.getAsLong(), millis.getAsLong())) return new HostStatus(true, null);
-            return new HostStatus(true, new Endpoint(world, epoch, generation, revision, address, deadline));
+            if (!deadline.isUsable(nanos.getAsLong(), millis.getAsLong())) return new HostStatus(true, maintenance == 1, false, null);
+            return new HostStatus(true, maintenance == 1, false, new Endpoint(world, epoch, generation, revision, address, deadline));
         } catch (IllegalArgumentException | ArithmeticException invalid) { throw new IOException("Invalid host status", invalid); }
+    }
+
+    public void setMaintenance(String world, boolean enabled) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID)) throw new IllegalArgumentException("Invalid world");
+        var body = new JsonObject(); body.addProperty("world", world); body.addProperty("enabled", enabled);
+        var result = post("maintenance-set", body).numbers();
+        if (required(result, "enabled") != (enabled ? 1 : 0) || required(result, "revision") < 0)
+            throw new IOException("Invalid maintenance receipt");
     }
 
     public EndpointLease endpointRevision(String world, String lease, long epoch, long marginSeconds) throws IOException, InterruptedException {
@@ -530,7 +538,7 @@ public final class LeaseAuthorityClient {
                         || name.equals("duration_seconds") || name.equals("active") || name.equals("held") || name.equals("endpoint_revision")
                         || name.equals("previous_generation") || name.equals("result_generation") || name.equals("object_size")
                         || name.equals("server_now") || name.equals("expires") || name.equals("created_at") || name.equals("keep_delta")
-                        || name.equals("managed")) {
+                        || name.equals("managed") || name.equals("maintenance") || name.equals("enabled") || name.equals("revision")) {
                     if (reader.peek() != JsonToken.NUMBER) throw new IOException("Invalid response field");
                     String value = reader.nextString();
                     if (!value.matches("-?(0|[1-9][0-9]*)")) throw new IOException("Invalid response number");

@@ -31,7 +31,7 @@ public final class HostHopScreen extends Screen {
     private final Screen parent;
     private final AtomicLong request = new AtomicLong();
     private Component status = Component.translatable("screen.hosthop.initial");
-    private Button register, authorize, authorizeSnapshot, join, history, exportRecovery, recoverUnclean;
+    private Button register, authorize, authorizeSnapshot, join, history, exportRecovery, recoverUnclean, maintenance;
     private EditBox initialWorld;
     private boolean startedHere;
     private boolean watchingSave;
@@ -61,8 +61,10 @@ public final class HostHopScreen extends Screen {
                 .bounds(x, height / 2 + 60, 103, 20).build());
         recoverUnclean = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.recover_unclean"), button -> confirmUncleanRecovery())
                 .bounds(x + 107, height / 2 + 60, 103, 20).build());
+        maintenance = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.maintenance"), button -> toggleMaintenance())
+                .bounds(x, height / 2 + 86, 103, 20).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
-                .bounds(x, height / 2 + 86, 210, 20).build());
+                .bounds(x + 107, height / 2 + 86, 103, 20).build());
         String currentStatus = HostWorldRuntime.lastStatus();
         if (!HostWorldRuntime.active() && currentStatus.equals("screen.hosthop.initial")) {
             try {
@@ -227,6 +229,7 @@ public final class HostHopScreen extends Screen {
                 var invitation = Invitation.fromSecrets(new WindowsSecretStore(secretPath()).load());
                 var authority = new LeaseAuthorityClient(URI.create(invitation.authority()), invitation.memberToken());
                 var host = authority.hostStatus(invitation.world(), 2);
+                if (host.maintenance()) { finish(id, "screen.hosthop.maintenance_blocked"); return; }
                 Path pending = secretPath().getParent().resolve("pending-host.dat");
                 boolean confirmedUnclean = Files.exists(pending) && "unclean-confirmed".equals(new WindowsSecretStore(pending).load().get("stage"));
                 Minecraft minecraft = Minecraft.getInstance();
@@ -236,6 +239,7 @@ public final class HostHopScreen extends Screen {
                     // Let the runtime inspect its protected journal before treating
                     // an unpublished host as an indefinitely running remote host.
                     boolean localPending = Files.exists(pending);
+                    if (host.recoveryRequired() && !localPending) { busy(false, "screen.hosthop.recovery_required"); return; }
                     if (!host.held() || confirmedUnclean || (host.endpoint() == null && localPending)) {
                         var vault = new WindowsSecretStore(secretPath());
                         var authorization = new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret());
@@ -260,12 +264,41 @@ public final class HostHopScreen extends Screen {
         });
     }
 
+    private void toggleMaintenance() {
+        long id = request.incrementAndGet();
+        busy(true, "screen.hosthop.maintenance_checking");
+        CompletableFuture.runAsync(() -> {
+            try {
+                var invitation = Invitation.fromSecrets(new WindowsSecretStore(secretPath()).load());
+                var authority = new LeaseAuthorityClient(URI.create(invitation.authority()), invitation.memberToken());
+                var state = authority.hostStatus(invitation.world(), 2);
+                if (state.held()) { finish(id, state.recoveryRequired() ? "screen.hosthop.recovery_required" : "screen.hosthop.maintenance_host_active"); return; }
+                Minecraft.getInstance().execute(() -> {
+                    var minecraft = Minecraft.getInstance();
+                    if (id != request.get() || minecraft.gui.screen() != this) return;
+                    minecraft.gui.setScreen(new ConfirmScreen(accepted -> {
+                        minecraft.gui.setScreen(this);
+                        if (!accepted) { busy(false, "screen.hosthop.initial"); return; }
+                        busy(true, "screen.hosthop.maintenance_checking");
+                        CompletableFuture.runAsync(() -> {
+                            try {
+                                authority.setMaintenance(invitation.world(), !state.maintenance());
+                                finish(id, state.maintenance() ? "screen.hosthop.maintenance_disabled" : "screen.hosthop.maintenance_enabled");
+                            } catch (Exception failure) { finish(id, "screen.hosthop.maintenance_failed"); }
+                        });
+                    }, Component.translatable("screen.hosthop.maintenance_title"), Component.translatable(state.maintenance()
+                            ? "screen.hosthop.maintenance_disable_confirm" : "screen.hosthop.maintenance_enable_confirm")));
+                });
+            } catch (Exception failure) { finish(id, "screen.hosthop.maintenance_failed"); }
+        });
+    }
+
     private void finish(long id, String message) {
         Minecraft.getInstance().execute(() -> {
             if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(false, message);
         });
     }
-    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; exportRecovery.active = !value; recoverUnclean.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
+    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; exportRecovery.active = !value; recoverUnclean.active = !value; maintenance.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
 
     @Override public void onClose() {
         request.incrementAndGet();

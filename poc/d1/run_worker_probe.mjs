@@ -30,14 +30,21 @@ try {
   await db.batch(migration.map(statement => db.prepare(statement)));
   await db.batch(load('checkpoint_migration.sql').split(/(?=CREATE (?:TABLE|TRIGGER|UNIQUE INDEX) )/).map(s => s.trim()).filter(Boolean).map(statement => db.prepare(statement)));
   await db.batch(load('checkpoint_dependencies_migration.sql').trim().split(/\r?\n(?=ALTER TABLE |CREATE |DROP TRIGGER )/).map(statement => db.prepare(statement)));
+  await db.batch(load('maintenance_migration.sql').trim().split(/\r?\n(?=CREATE )/).map(statement => db.prepare(statement)));
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('test-world').run();
   const call = (route, body, credential = token) => mf.dispatchFetch(`http://localhost/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
   });
   const body = { world: 'test-world', lease: 'test-lease', duration: 30 };
+  check((await call('maintenance-set', { world: 'test-world', enabled: true })).status === 200, 'maintenance enable failed');
+  let maintenanceStatus = await (await call('host-status', { world: 'test-world' })).json();
+  check(maintenanceStatus.maintenance === 1 && maintenanceStatus.held === 0, 'maintenance status incorrect');
+  check((await call('acquire', body)).status === 409, 'maintenance allowed host acquisition');
+  check((await call('maintenance-set', { world: 'test-world', enabled: false })).status === 200, 'maintenance disable failed');
   check((await call('acquire', body, 'z'.repeat(43))).status === 401, 'unauthorized request succeeded');
   const acquired = await call('acquire', body);
   check(acquired.status === 200, 'acquisition failed in workerd');
+  check((await call('maintenance-set', { world: 'test-world', enabled: true })).status === 409, 'maintenance changed while host was held');
   const grant = await acquired.json();
   check((await call('acquire-status', body)).status === 200, 'grant lookup failed');
   const current = await (await call('endpoint-revision', { ...body, epoch: grant.epoch })).json();
