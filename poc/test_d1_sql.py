@@ -12,6 +12,7 @@ SCHEMA = (Path(__file__).parent / "d1" / "schema.sql").read_text(encoding="utf-8
 CHECKPOINT_SCHEMA = (Path(__file__).parent / "d1" / "checkpoint_migration.sql").read_text(encoding="utf-8")
 CHECKPOINT_DEPENDENCIES = (Path(__file__).parent / "d1" / "checkpoint_dependencies_migration.sql").read_text(encoding="utf-8")
 MAINTENANCE_SCHEMA = (Path(__file__).parent / "d1" / "maintenance_migration.sql").read_text(encoding="utf-8")
+COMPATIBILITY_SCHEMA = (Path(__file__).parent / "d1" / "compatibility_migration.sql").read_text(encoding="utf-8")
 CHECKPOINT = (Path(__file__).parent / "d1" / "checkpoint.sql").read_text(encoding="utf-8")
 CHECKPOINT_DELETE = (Path(__file__).parent / "d1" / "checkpoint_delete.sql").read_text(encoding="utf-8")
 CHECKPOINT_PRUNE = (Path(__file__).parent / "d1" / "checkpoint_prune.sql").read_text(encoding="utf-8")
@@ -33,6 +34,7 @@ class D1SqlTest(unittest.TestCase):
             c.executescript(CHECKPOINT_SCHEMA)
             c.executescript(CHECKPOINT_DEPENDENCIES)
             c.executescript(MAINTENANCE_SCHEMA)
+            c.executescript(COMPATIBILITY_SCHEMA)
             c.execute("INSERT INTO worlds (id, owner, lease_id, epoch, expires) VALUES (?, ?, ?, ?, ?)", ("w", "a", "lease-a", 1, int(time.time()) + 300))
 
     def attempt(self, operation_id, digest="hash-a", owner="a", lease_id="lease-a", epoch=1, generation=0):

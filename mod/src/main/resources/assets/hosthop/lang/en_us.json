@@ -1,5 +1,11 @@
 {
   "screen.hosthop.title": "Shared World",
+  "screen.hosthop.compatibility_mod_mismatch": "Mod configuration differs",
+  "screen.hosthop.compatibility_mod_detail": "Cannot connect because mods differ: %s",
+  "screen.hosthop.compatibility_config_title": "Configuration differs",
+  "screen.hosthop.compatibility_config_warning": "Config files differ: %s. Adjust manually if needed. Join anyway?",
+  "screen.hosthop.compatibility_config_cancelled": "Check the configuration before joining again",
+  "screen.hosthop.compatibility_recheck": "Configuration changed; automatic reconnect stopped. Recheck from the shared world screen",
   "screen.hosthop.maintenance": "Maintenance",
   "screen.hosthop.maintenance_title": "Change maintenance mode",
   "screen.hosthop.maintenance_checking": "Checking maintenance status...",

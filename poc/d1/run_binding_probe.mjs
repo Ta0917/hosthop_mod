@@ -59,6 +59,7 @@ try {
   await db.batch(checkpointMigration.map(statement => db.prepare(statement)));
   await db.batch(load('checkpoint_dependencies_migration.sql').trim().split(/\r?\n(?=ALTER TABLE |CREATE |DROP TRIGGER )/).map(statement => db.prepare(statement)));
   await db.batch(load('maintenance_migration.sql').trim().split(/\r?\n(?=CREATE )/).map(statement => db.prepare(statement)));
+  await db.prepare(load('compatibility_migration.sql')).run();
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('recovery-world').run();
   const recoveryGrant = await db.prepare(acquire).bind('recovery-world', 'owner', 'lease', 120).first();
   const recover = (owner, operation, generation = 0) => db.prepare(recoverStopped)

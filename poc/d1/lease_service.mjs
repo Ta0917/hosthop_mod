@@ -16,7 +16,7 @@ async function digestToken(token) {
   return Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, '0')).join('');
 }
 
-async function readJson(request) {
+async function readJson(request, limit = 4096) {
   const reader = request.body?.getReader();
   if (!reader) throw new Error('missing body');
   let size = 0;
@@ -25,7 +25,7 @@ async function readJson(request) {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.length;
-    if (size > 4096) { await reader.cancel(); throw new Error('body too large'); }
+    if (size > limit) { await reader.cancel(); throw new Error('body too large'); }
     parts.push(value);
   }
   const bytes = new Uint8Array(size);
@@ -47,16 +47,17 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       if (request.method !== 'POST') return json({ error: 'not found' }, 404);
       const route = new URL(request.url).pathname;
       if (!['/acquire', '/renew', '/acquire-status', '/endpoint-update', '/endpoint-status', '/endpoint-revision',
-        '/commit', '/commit-status', '/recover-stopped', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/maintenance-set', '/cancel-acquisition', '/history', '/checkpoint', '/checkpoint-status', '/checkpoint-history', '/checkpoint-full', '/checkpoint-delete', '/checkpoint-retention', '/checkpoint-retention-set', '/checkpoint-prune', '/checkpoint-prune-delete', '/checkpoint-trash-pending', '/checkpoint-trash-done'].includes(route))
+        '/commit', '/commit-status', '/recover-stopped', '/snapshot-status', '/release', '/release-status', '/abort', '/host-status', '/maintenance-set', '/compatibility-get', '/compatibility-set', '/cancel-acquisition', '/history', '/checkpoint', '/checkpoint-status', '/checkpoint-history', '/checkpoint-full', '/checkpoint-delete', '/checkpoint-retention', '/checkpoint-retention-set', '/checkpoint-prune', '/checkpoint-prune-delete', '/checkpoint-trash-pending', '/checkpoint-trash-done'].includes(route))
         return json({ error: 'not found' }, 404);
       const auth = request.headers.get('Authorization') || '';
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
       if (!tokenPattern.test(token)) return json({ error: 'unauthorized' }, 401);
       let body;
-      try { body = await readJson(request); } catch { return json({ error: 'invalid request' }, 400); }
+      try { body = await readJson(request, route === '/compatibility-set' ? 131072 : 4096); } catch { return json({ error: 'invalid request' }, 400); }
       if (!body || Array.isArray(body) || typeof body !== 'object' || !identifier(body.world))
         return json({ error: 'invalid request' }, 400);
-      if (!['/endpoint-status', '/snapshot-status', '/host-status', '/maintenance-set', '/history', '/checkpoint-history', '/checkpoint-full', '/checkpoint-delete', '/checkpoint-retention', '/checkpoint-retention-set', '/checkpoint-prune', '/checkpoint-prune-delete', '/checkpoint-trash-pending', '/checkpoint-trash-done'].includes(route) && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
+      if (!['/endpoint-status', '/snapshot-status', '/host-status', '/maintenance-set', '/compatibility-get', '/history', '/checkpoint-history', '/checkpoint-full', '/checkpoint-delete', '/checkpoint-retention', '/checkpoint-retention-set', '/checkpoint-prune', '/checkpoint-prune-delete', '/checkpoint-trash-pending', '/checkpoint-trash-done'].includes(route) && !identifier(body.lease)) return json({ error: 'invalid request' }, 400);
+      if (route === '/compatibility-set' && (!Number.isSafeInteger(body.epoch) || body.epoch < 1 || typeof body.manifest !== 'string' || body.manifest.length > 100000 || body.manifest.length < 2)) return json({ error: 'invalid request' }, 400);
       if (route === '/maintenance-set' && typeof body.enabled !== 'boolean') return json({ error: 'invalid request' }, 400);
       if (['/acquire', '/renew', '/acquire-status'].includes(route)
           && (!Number.isSafeInteger(body.duration) || body.duration < 1 || body.duration > 300))
@@ -178,6 +179,20 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       if (route === '/host-status') {
         const status = await env.DB.prepare(sql.hostStatus).bind(body.world).first();
         return status ? json(status) : json({ error: 'unknown world' }, 404);
+      }
+      if (route === '/compatibility-get') {
+        const row = await env.DB.prepare(`SELECT c.epoch,c.manifest FROM host_compatibility c JOIN worlds w ON w.id=c.world_id
+          WHERE c.world_id=?1 AND c.lease_id=w.lease_id AND c.epoch=w.epoch AND w.expires>unixepoch('now')`).bind(body.world).first();
+        return row ? json(row) : json({ error: 'compatibility unavailable' }, 404);
+      }
+      if (route === '/compatibility-set') {
+        const row = await env.DB.prepare(`INSERT INTO host_compatibility(world_id,lease_id,epoch,manifest)
+          SELECT id,lease_id,epoch,?5 FROM worlds WHERE id=?1 AND owner=?2 AND lease_id=?3 AND epoch=?4 AND expires>unixepoch('now')
+          ON CONFLICT(world_id) DO UPDATE SET lease_id=excluded.lease_id,epoch=excluded.epoch,manifest=excluded.manifest
+          WHERE host_compatibility.epoch < excluded.epoch OR (host_compatibility.epoch = excluded.epoch
+            AND host_compatibility.lease_id = excluded.lease_id AND host_compatibility.manifest = excluded.manifest)
+          RETURNING epoch`).bind(body.world,member.owner,body.lease,body.epoch,body.manifest).first();
+        return row ? json(row) : json({ error: 'lease conflict' }, 409);
       }
       if (route === '/maintenance-set') {
         // A held or expired lease must be resolved independently, never cleared here.

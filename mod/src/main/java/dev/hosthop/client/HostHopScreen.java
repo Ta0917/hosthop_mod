@@ -230,6 +230,8 @@ public final class HostHopScreen extends Screen {
                 var authority = new LeaseAuthorityClient(URI.create(invitation.authority()), invitation.memberToken());
                 var host = authority.hostStatus(invitation.world(), 2);
                 if (host.maintenance()) { finish(id, "screen.hosthop.maintenance_blocked"); return; }
+                var differences = host.endpoint() == null ? null : authority.compatibility(invitation.world(), host.endpoint().epoch())
+                        .compare(dev.hosthop.config.CompatibilityManifest.capture(Minecraft.getInstance().gameDirectory.toPath()));
                 Path pending = secretPath().getParent().resolve("pending-host.dat");
                 boolean confirmedUnclean = Files.exists(pending) && "unclean-confirmed".equals(new WindowsSecretStore(pending).load().get("stage"));
                 Minecraft minecraft = Minecraft.getInstance();
@@ -252,6 +254,28 @@ public final class HostHopScreen extends Screen {
                     }
                     var endpoint = host.endpoint();
                     if (endpoint == null) { busy(false, "screen.hosthop.host_waiting"); return; }
+                    if (differences != null && !differences.mods().isEmpty()) {
+                        busy(false, "screen.hosthop.compatibility_mod_mismatch");
+                        status = Component.translatable("screen.hosthop.compatibility_mod_detail", String.join(", ", differences.mods().stream().limit(4).toList()));
+                        return;
+                    }
+                    if (differences != null && !differences.configs().isEmpty()) {
+                        minecraft.gui.setScreen(new ConfirmScreen(accepted -> {
+                            minecraft.gui.setScreen(this);
+                            if (accepted) connect(endpoint, invitation, authority);
+                            else busy(false, "screen.hosthop.compatibility_config_cancelled");
+                        }, Component.translatable("screen.hosthop.compatibility_config_title"),
+                                Component.translatable("screen.hosthop.compatibility_config_warning", String.join(", ", differences.configs().stream().limit(5).toList()))));
+                        return;
+                    }
+                    connect(endpoint, invitation, authority);
+                });
+            } catch (Exception failure) { finish(id, "screen.hosthop.join_failed"); }
+        });
+    }
+
+    private void connect(LeaseAuthorityClient.Endpoint endpoint, Invitation invitation, LeaseAuthorityClient authority) {
+                    var minecraft = Minecraft.getInstance();
                     if (!endpoint.deadline().isUsable(System.nanoTime(), System.currentTimeMillis())) {
                         busy(false, "screen.hosthop.join_failed");
                         return;
@@ -259,9 +283,6 @@ public final class HostHopScreen extends Screen {
                     var server = new ServerData("HostHop " + invitation.world(), endpoint.address(), ServerData.Type.OTHER);
                     GuestReconnect.track(invitation, authority, endpoint, this);
                     ConnectScreen.startConnecting(this, minecraft, ServerAddress.parseString(endpoint.address()), server, false, null);
-                });
-            } catch (Exception failure) { finish(id, "screen.hosthop.join_failed"); }
-        });
     }
 
     private void toggleMaintenance() {
@@ -298,6 +319,7 @@ public final class HostHopScreen extends Screen {
             if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(false, message);
         });
     }
+    void compatibilityChanged() { busy(false, "screen.hosthop.compatibility_recheck"); }
     private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; exportRecovery.active = !value; recoverUnclean.active = !value; maintenance.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
 
     @Override public void onClose() {

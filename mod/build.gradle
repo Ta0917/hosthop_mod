@@ -289,6 +289,12 @@ tasks.register('leaseSafetyCheck', JavaExec) {
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.lease.ConservativeLeaseDeadlineTest'
 }
+tasks.register('compatibilityManifestCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.config.CompatibilityManifestTest'
+}
+tasks.named('check') { dependsOn tasks.named('compatibilityManifestCheck') }
 tasks.register('hostGateSafetyCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath

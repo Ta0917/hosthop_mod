@@ -183,6 +183,9 @@ public final class HostWorldRuntime {
                 if (!coordinator.recoverAcquisition(acquisition)) throw first;
             }
             pending.save(pendingData("preparing", id, levelId));
+            stage = "publishing compatibility";
+            var compatibility = dev.hosthop.config.CompatibilityManifest.capture(game);
+            authority.publishCompatibility(invitation.world(), id, acquisition.epoch(), compatibility.json());
             stage = "restoring world";
             var activeLease = acquisition;
             renewer.scheduleWithFixedDelay(() -> renew(activeLease), 15, 15, TimeUnit.SECONDS);

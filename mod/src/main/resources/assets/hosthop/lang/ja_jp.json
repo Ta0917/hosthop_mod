@@ -1,5 +1,11 @@
 {
   "screen.hosthop.title": "共有ワールド",
+  "screen.hosthop.compatibility_mod_mismatch": "MOD構成が一致しません",
+  "screen.hosthop.compatibility_mod_detail": "MOD構成が違うため接続できません: %s",
+  "screen.hosthop.compatibility_config_title": "設定ファイルの違い",
+  "screen.hosthop.compatibility_config_warning": "ホストと異なる設定: %s。必要なら手動で変更してください。そのまま参加しますか？",
+  "screen.hosthop.compatibility_config_cancelled": "設定を確認してから再度参加してください",
+  "screen.hosthop.compatibility_recheck": "構成が変わったため、自動再接続を停止しました。共有ワールド画面から再確認してください",
   "screen.hosthop.maintenance": "メンテナンス",
   "screen.hosthop.maintenance_title": "メンテナンス切替",
   "screen.hosthop.maintenance_checking": "メンテナンス状態を確認中…",

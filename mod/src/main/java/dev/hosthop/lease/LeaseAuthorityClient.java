@@ -29,7 +29,7 @@ import java.util.function.LongSupplier;
 
 /** Blocking HTTPS lease transport; invoke off the Minecraft thread. Not wired to hosting. */
 public final class LeaseAuthorityClient {
-    private static final int MAX_REPLY_BYTES = 16_384;
+    private static final int MAX_REPLY_BYTES = 131_072;
     private static final String ID = "[A-Za-z0-9_-]{1,80}";
     private final URI base;
     private final String token;
@@ -143,6 +143,28 @@ public final class LeaseAuthorityClient {
         var result = post("maintenance-set", body).numbers();
         if (required(result, "enabled") != (enabled ? 1 : 0) || required(result, "revision") < 0)
             throw new IOException("Invalid maintenance receipt");
+    }
+
+    public void publishCompatibility(String world, String lease, long epoch, String manifest) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID) || lease == null || !lease.matches(ID) || epoch < 1 || manifest == null || manifest.length() > 100000)
+            throw new IllegalArgumentException("Invalid compatibility information");
+        var body = new JsonObject(); body.addProperty("world", world); body.addProperty("lease", lease); body.addProperty("epoch", epoch); body.addProperty("manifest", manifest);
+        if (required(post("compatibility-set", body).numbers(), "epoch") != epoch) throw new IOException("Compatibility epoch mismatch");
+    }
+
+    public dev.hosthop.config.CompatibilityManifest compatibility(String world, long epoch) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID) || epoch < 1) throw new IllegalArgumentException("Invalid compatibility request");
+        var body = new JsonObject(); body.addProperty("world", world);
+        var request = HttpRequest.newBuilder(base.resolve("/compatibility-get")).timeout(Duration.ofSeconds(10))
+                .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8)).build();
+        var reply = exchange.send(request);
+        if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES) throw new IOException("Compatibility unavailable");
+        try {
+            var root = com.google.gson.JsonParser.parseString(reply.body()).getAsJsonObject();
+            if (root.get("epoch").getAsLong() != epoch) throw new IOException("Compatibility epoch mismatch");
+            return dev.hosthop.config.CompatibilityManifest.parse(root.get("manifest").getAsString());
+        } catch (RuntimeException invalid) { throw new IOException("Invalid compatibility response", invalid); }
     }
 
     public EndpointLease endpointRevision(String world, String lease, long epoch, long marginSeconds) throws IOException, InterruptedException {

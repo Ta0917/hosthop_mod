@@ -17,6 +17,7 @@ public final class HostHopReconnectScreen extends Screen {
     private final long started;
     private int ticks;
     private boolean checking;
+    private record Checked(dev.hosthop.lease.LeaseAuthorityClient.Endpoint endpoint, boolean changed) {}
 
     HostHopReconnectScreen(GuestReconnect reconnect) {
         super(Component.translatable("screen.hosthop.reconnecting"));
@@ -37,12 +38,26 @@ public final class HostHopReconnectScreen extends Screen {
         if (checking || ++ticks < interval) return;
         ticks = 0; checking = true;
         CompletableFuture.supplyAsync(() -> {
-            try { return reconnect.authority.hostStatus(reconnect.invitation.world(), 2).endpoint(); }
-            catch (Exception failure) { return null; }
-        }).thenAccept(endpoint -> Minecraft.getInstance().execute(() -> {
+            try {
+                var state = reconnect.authority.hostStatus(reconnect.invitation.world(), 2);
+                var endpoint = state.endpoint();
+                if (state.maintenance() || endpoint == null || endpoint.epoch() < reconnect.minimumEpoch) return new Checked(null, false);
+                var remote = reconnect.authority.compatibility(reconnect.invitation.world(), endpoint.epoch());
+                var local = dev.hosthop.config.CompatibilityManifest.capture(Minecraft.getInstance().gameDirectory.toPath());
+                var diff = remote.compare(local);
+                return new Checked(endpoint, !diff.mods().isEmpty() || !diff.configs().isEmpty());
+            } catch (Exception failure) { return new Checked(null, false); }
+        }).thenAccept(checked -> Minecraft.getInstance().execute(() -> {
             checking = false;
             var minecraft = Minecraft.getInstance();
+            var endpoint = checked.endpoint();
             if (!GuestReconnect.active(reconnect) || minecraft.gui.screen() != this || endpoint == null || endpoint.epoch() < reconnect.minimumEpoch) return;
+            if (checked.changed()) {
+                reconnect.cancel();
+                minecraft.gui.setScreen(reconnect.parent);
+                if (reconnect.parent instanceof HostHopScreen screen) screen.compatibilityChanged();
+                return;
+            }
             var attempt = reconnect.controller.connect(reconnect.session, endpoint, System.nanoTime(), System.currentTimeMillis());
             if (attempt == null) return;
             reconnect.connecting(endpoint, attempt);

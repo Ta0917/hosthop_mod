@@ -36,6 +36,7 @@ await db.batch(migration.map(statement => db.prepare(statement)));
 await db.batch(load('checkpoint_migration.sql').split(/(?=CREATE (?:TABLE|TRIGGER|UNIQUE INDEX) )/).map(s => s.trim()).filter(Boolean).map(statement => db.prepare(statement)));
 await db.batch(load('checkpoint_dependencies_migration.sql').trim().split(/\r?\n(?=ALTER TABLE |CREATE |DROP TRIGGER )/).map(statement => db.prepare(statement)));
 await db.batch(load('maintenance_migration.sql').trim().split(/\r?\n(?=CREATE )/).map(statement => db.prepare(statement)));
+await db.prepare(load('compatibility_migration.sql')).run();
 await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('world').run();
 let dropFirstAcquisitionReply = !process.env.HOSTHOP_TEST_NO_DROPS;
 let dropFirstCommitReply = !process.env.HOSTHOP_TEST_NO_DROPS;

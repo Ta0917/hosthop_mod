@@ -31,6 +31,7 @@ try {
   await db.batch(load('checkpoint_migration.sql').split(/(?=CREATE (?:TABLE|TRIGGER|UNIQUE INDEX) )/).map(s => s.trim()).filter(Boolean).map(statement => db.prepare(statement)));
   await db.batch(load('checkpoint_dependencies_migration.sql').trim().split(/\r?\n(?=ALTER TABLE |CREATE |DROP TRIGGER )/).map(statement => db.prepare(statement)));
   await db.batch(load('maintenance_migration.sql').trim().split(/\r?\n(?=CREATE )/).map(statement => db.prepare(statement)));
+  await db.prepare(load('compatibility_migration.sql')).run();
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('test-world').run();
   const call = (route, body, credential = token) => mf.dispatchFetch(`http://localhost/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
@@ -46,6 +47,11 @@ try {
   check(acquired.status === 200, 'acquisition failed in workerd');
   check((await call('maintenance-set', { world: 'test-world', enabled: true })).status === 409, 'maintenance changed while host was held');
   const grant = await acquired.json();
+  check((await call('compatibility-set', { ...body, epoch: grant.epoch + 1, manifest: '{}' })).status === 409, 'stale host published compatibility');
+  check((await call('compatibility-set', { ...body, epoch: grant.epoch, manifest: '{"mods":{},"ignored":[],"configs":{}}' })).status === 200, 'compatibility publication failed');
+  check((await call('compatibility-set', { ...body, epoch: grant.epoch, manifest: '{"different":true}' })).status === 409, 'active compatibility changed');
+  const compatibility = await (await call('compatibility-get', { world: 'test-world' })).json();
+  check(compatibility.epoch === grant.epoch && JSON.parse(compatibility.manifest).mods, 'compatibility lookup failed');
   check((await call('acquire-status', body)).status === 200, 'grant lookup failed');
   const current = await (await call('endpoint-revision', { ...body, epoch: grant.epoch })).json();
   const published = await call('endpoint-update', { ...body, epoch: grant.epoch,

@@ -117,7 +117,7 @@ public final class LeaseAuthorityClientTest {
             @Override public void request(long count) { }
             @Override public void cancel() { cancelled.set(true); }
         });
-        subscriber.onNext(java.util.List.of(java.nio.ByteBuffer.wrap(new byte[16_385])));
+        subscriber.onNext(java.util.List.of(java.nio.ByteBuffer.wrap(new byte[131_073])));
         check(cancelled.get());
         try {
             subscriber.getBody().toCompletableFuture().join();

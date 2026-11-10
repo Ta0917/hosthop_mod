@@ -102,6 +102,11 @@ public final class LeaseServiceIntegrationProbe {
             catch (java.io.IOException expected) { }
             check(gate.phase() == LocalHostGate.Phase.ACQUIRING);
             check(coordinator.recoverAcquisition(acquisition));
+            var manifest = new dev.hosthop.config.CompatibilityManifest(java.util.Map.of("example", "1"), java.util.Set.of("client"), java.util.Map.of("example.toml", "a".repeat(64)));
+            client.publishCompatibility("world", "lease", acquisition.epoch(), manifest.json());
+            check(client.compatibility("world", acquisition.epoch()).equals(manifest));
+            try { client.compatibility("world", acquisition.epoch() + 1); throw new AssertionError("stale manifest accepted"); }
+            catch (java.io.IOException expected) { }
             var record = client.lookupAcquisition("world", "lease", 30, "owner", 2);
             check(record.epoch() == 1 && record.generation() == 0);
             transfer.prepare(acquisition, initial, archiveA, preparedA, "drive-test-token");
