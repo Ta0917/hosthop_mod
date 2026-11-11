@@ -72,7 +72,14 @@ public final class GoogleDriveAuthorization {
 
     /** Starts only a loopback listener; the caller explicitly opens authorizationUri in the user's browser. */
     public Session begin(String expectedFolder) throws IOException {
-        if (expectedFolder != null && !expectedFolder.matches("[A-Za-z0-9_-]{1,200}")) throw new IllegalArgumentException("Invalid folder ID");
+        return begin(expectedFolder == null ? new String[0] : new String[]{expectedFolder});
+    }
+
+    /** One consent page for several files (for example a delta and the base it needs). */
+    public Session begin(String... expectedIds) throws IOException {
+        if (expectedIds == null || expectedIds.length > 4) throw new IllegalArgumentException("Invalid file list");
+        for (String item : expectedIds) if (item == null || !item.matches("[A-Za-z0-9_-]{1,200}")) throw new IllegalArgumentException("Invalid folder ID");
+        String expectedFolder = expectedIds.length == 0 ? null : String.join(",", expectedIds);
         String verifier = randomString(), state = randomString();
         String challenge;
         try { challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII))); }
@@ -105,8 +112,10 @@ public final class GoogleDriveAuthorization {
             try {
                 var result = callback.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
                 String code = result.get("code"), folder = result.get("picked_file_ids");
-                if (!valid(code, 2048) || folder == null || !folder.matches("[A-Za-z0-9_-]{1,200}")
-                        || (expectedFolder != null && !expectedFolder.equals(folder))) throw new IOException("Drive authorization was not completed");
+                if (!valid(code, 2048) || folder == null || !folder.matches("[A-Za-z0-9_-]{1,200}(,[A-Za-z0-9_-]{1,200}){0,3}")) throw new IOException("Drive authorization was not completed");
+                // Everything picked must have been offered; granting only some is fine, the caller re-checks access.
+                if (expectedFolder != null && !java.util.Set.of(expectedFolder.split(",")).containsAll(java.util.List.of(folder.split(",")))) throw new IOException("Drive authorization was not completed");
+                folder = folder.split(",")[0];
                 String form = "code=" + encode(code) + "&client_id=" + encode(clientId) + "&client_secret=" + encode(clientSecret)
                         + "&redirect_uri=" + encode(redirect) + "&grant_type=authorization_code&code_verifier=" + encode(verifier);
                 return tokens(send(form), folder, null);

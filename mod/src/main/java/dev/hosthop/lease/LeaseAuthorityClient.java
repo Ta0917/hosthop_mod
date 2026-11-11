@@ -48,7 +48,10 @@ public final class LeaseAuthorityClient {
     public record Grant(long epoch, long generation, ConservativeLeaseDeadline deadline) {}
     public record Endpoint(String world, long epoch, long generation, long revision, String address,
                            ConservativeLeaseDeadline deadline) {}
-    public record Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object) {}
+    /** baseId is the full snapshot a delta head depends on, or empty when unknown (older service or full head). */
+    public record Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object, String baseId) {
+        public Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object) { this(generation, object, ""); }
+    }
     public record Checkpoint(String id, long generation, GoogleDriveSnapshotStore.ObjectRef object, String kind, long createdAt) {}
     public record EndpointLease(long epoch, long revision, String address, ConservativeLeaseDeadline deadline) {}
     public record HostStatus(boolean held, boolean maintenance, boolean recoveryRequired, Endpoint endpoint) {}
@@ -214,7 +217,9 @@ public final class LeaseAuthorityClient {
         String digest = fields.strings().get("digest"), objectId = fields.strings().get("object_id");
         if (generation < 1 || size < 1 || size > 68_719_476_736L || digest == null || !digest.matches("[0-9a-f]{64}")
                 || objectId == null || !objectId.matches("[A-Za-z0-9_-]{1,200}")) throw new IOException("Invalid snapshot reference");
-        return new Snapshot(generation, new GoogleDriveSnapshotStore.ObjectRef(objectId, digest, size));
+        String baseId = fields.strings().get("base_object_id");
+        if (baseId == null || !baseId.matches("[A-Za-z0-9_-]{1,200}") || baseId.equals(objectId)) baseId = "";
+        return new Snapshot(generation, new GoogleDriveSnapshotStore.ObjectRef(objectId, digest, size), baseId);
     }
 
     /** Returns up to four committed snapshot references, newest first. */
@@ -296,10 +301,17 @@ public final class LeaseAuthorityClient {
 
     /** Publish only after the server is stopped and the uploaded object has been verified. */
     public PublicationRecord commit(PublicationRecord operation, String driveToken) throws IOException, InterruptedException {
+        return commit(operation, driveToken, "");
+    }
+
+    /** baseId names the full snapshot a delta depends on so guests can be granted both files at once; empty for a full. */
+    public PublicationRecord commit(PublicationRecord operation, String driveToken, String baseId) throws IOException, InterruptedException {
+        if (baseId == null || (!baseId.isEmpty() && !baseId.matches("[A-Za-z0-9_-]{1,200}"))) throw new IllegalArgumentException("Invalid base");
         if (driveToken == null || driveToken.isBlank() || driveToken.length() > 2048 || driveToken.chars().anyMatch(Character::isISOControl))
             throw new IllegalArgumentException("Invalid Drive token");
         var body = publicationBody(operation);
         body.addProperty("driveToken", driveToken);
+        if (!baseId.isEmpty()) body.addProperty("baseFileId", baseId);
         return matchPublication(operation, post("commit", body));
     }
 

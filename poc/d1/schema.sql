@@ -114,3 +114,9 @@ BEGIN
       AND generation = NEW.previous_generation AND expires > unixepoch('now');
     SELECT CASE WHEN changes() != 1 THEN RAISE(ABORT, 'stale commit') END;
 END;
+
+-- Delta dependency of a committed snapshot (see snapshot_bases_migration.sql).
+CREATE TABLE snapshot_bases (
+    world_id TEXT NOT NULL, object_id TEXT NOT NULL, base_object_id TEXT NOT NULL,
+    PRIMARY KEY (world_id, object_id)
+);

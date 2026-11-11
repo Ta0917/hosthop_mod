@@ -210,7 +210,7 @@ public final class SharedWorldTransfer {
         if (!PublicationPreparation.prepare(gate, acquisition.attempt(), journal, operation, nanos, millis))
             throw new IOException("Lease expired before publication");
         try {
-            var receipt = authority.commit(operation, driveToken);
+            var receipt = authority.commit(operation, driveToken, upload.equals(archive) ? "" : baseRef.fileId());
             if (!gate.publicationConfirmed(acquisition.attempt(), receipt, nanos.getAsLong(), millis.getAsLong()))
                 throw new IOException("Publication needs reconciliation");
         } catch (IOException | InterruptedException | RuntimeException failure) {

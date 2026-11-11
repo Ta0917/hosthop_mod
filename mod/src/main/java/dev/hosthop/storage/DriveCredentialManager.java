@@ -61,14 +61,20 @@ public final class DriveCredentialManager {
 
     /** Explicitly grants access to a snapshot created by another member. */
     public void authorizeFile(String expectedFile, String expectedFolder, Consumer<URI> openBrowser) throws IOException, InterruptedException {
-        if (openBrowser == null || expectedFile == null || !expectedFile.matches("[A-Za-z0-9_-]{1,200}")
+        authorizeFiles(new String[]{expectedFile}, expectedFolder, openBrowser);
+    }
+
+    /** Grants several snapshot files in a single consent page. */
+    public void authorizeFiles(String[] expectedFiles, String expectedFolder, Consumer<URI> openBrowser) throws IOException, InterruptedException {
+        if (openBrowser == null || expectedFiles == null || expectedFiles.length == 0
+                || java.util.Arrays.stream(expectedFiles).anyMatch(f -> f == null || !f.matches("[A-Za-z0-9_-]{1,200}"))
                 || expectedFolder == null || !expectedFolder.matches("[A-Za-z0-9_-]{1,200}"))
             throw new IllegalArgumentException("Invalid file authorization");
         if (!authorizing.compareAndSet(false, true)) throw new IOException("Drive authorization already in progress");
         long generation = authorizationGeneration.get();
         try {
             String originalAccount = authorization.accountId(access().accessToken());
-            try (var session = authorization.begin(expectedFile)) {
+            try (var session = authorization.begin(expectedFiles)) {
             activeSession = session;
             if (generation != authorizationGeneration.get()) throw new IOException("Drive authorization cancelled");
             openBrowser.accept(session.authorizationUri());

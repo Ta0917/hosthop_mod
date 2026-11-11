@@ -236,6 +236,10 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
         await env.DB.prepare(route === '/recover-stopped' ? sql.recoverStopped : sql.commit).bind(body.world, body.operation, member.owner, body.lease, body.epoch,
           body.previousGeneration, body.digest, body.fileId, body.size).all();
         receipt = await find();
+        if (matches(receipt) && route === '/commit' && typeof body.baseFileId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(body.baseFileId) && body.baseFileId !== body.fileId) {
+          // Best effort: a missing record only means guests authorize the base in a second step.
+          try { await env.DB.prepare(sql.snapshotBaseRecord).bind(body.world, body.fileId, body.baseFileId).run(); } catch { }
+        }
         return matches(receipt) ? json(receipt) : json({ error: 'lease conflict' }, 409);
       }
       if (route === '/release' || route === '/release-status') {

@@ -175,7 +175,10 @@ public final class HostHopScreen extends Screen {
             var snapshot = authority.snapshot(invitation.world());
             var token = manager.access().accessToken();
             if (!store.canRead(snapshot.object(), token)) {
-                manager.authorizeFile(snapshot.object().fileId(), invitation.folder(), open);
+                // When the service already told us the base, one consent page covers both files.
+                String[] files = snapshot.baseId().isEmpty() ? new String[]{snapshot.object().fileId()}
+                        : new String[]{snapshot.object().fileId(), snapshot.baseId()};
+                manager.authorizeFiles(files, invitation.folder(), open);
                 token = manager.access().accessToken();
             }
             if (store.isDelta(snapshot.object(), token)) {
