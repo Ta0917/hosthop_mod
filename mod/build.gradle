@@ -16,7 +16,9 @@ tasks.named('wrapper', Wrapper).configure {
     distributionType = Wrapper.DistributionType.BIN
 }
 
-version = mod_version
+// Every build gets its own version (e.g. 0.2.0-dev.202611111530) so jars sent around cannot be mixed up.
+// Pass -PreleaseVersion to build exactly mod_version.
+version = project.hasProperty('releaseVersion') ? mod_version : "${mod_version}.${new Date().format('yyyyMMddHHmm', TimeZone.getTimeZone('Asia/Tokyo'))}"
 group = mod_group_id
 
 sourceSets.main.resources {
@@ -239,7 +241,7 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
             mod_id                 : mod_id,
             mod_name               : mod_name,
             mod_license            : mod_license,
-            mod_version            : mod_version,
+            mod_version            : project.version.toString(),
             relay_mixin            : project.hasProperty('e4mcRelayProbe') ? '[[mixins]]\nconfig="hosthop-relay-probe.mixins.json"' : '',
             stop_mixin             : project.hasProperty('hostStopProbe') ? '[[mixins]]\nconfig="hosthop-stop-probe.mixins.json"' : '',
     ]
