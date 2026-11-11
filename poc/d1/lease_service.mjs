@@ -222,8 +222,19 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
         const matches = row => row && row.owner === member.owner && row.lease_id === body.lease && row.epoch === body.epoch
           && row.previous_generation === body.previousGeneration && row.digest === body.digest && row.object_id === body.fileId
           && row.object_size === body.size && row.result_generation === body.previousGeneration + 1;
+        // Best effort, and repeated on a retry whose first response was lost: a missing record only
+        // means guests authorize the base in a second step.
+        const recordBase = async () => {
+          if (route === '/commit-status' || typeof body.baseFileId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(body.baseFileId)
+              || body.baseFileId === body.fileId) return;
+          try { await env.DB.prepare(sql.snapshotBaseRecord).bind(body.world, body.fileId, body.baseFileId).run(); } catch { }
+        };
         let receipt = await find();
-        if (receipt) return matches(receipt) ? json(receipt) : json({ error: 'operation conflict' }, 409);
+        if (receipt) {
+          if (!matches(receipt)) return json({ error: 'operation conflict' }, 409);
+          await recordBase();
+          return json(receipt);
+        }
         if (route === '/commit-status') return json({ error: 'unknown operation' }, 404);
         const world = env.WORLDS?.find(item => item.id === body.world);
         if (!world || typeof world.folder !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(world.folder)
@@ -236,11 +247,9 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
         await env.DB.prepare(route === '/recover-stopped' ? sql.recoverStopped : sql.commit).bind(body.world, body.operation, member.owner, body.lease, body.epoch,
           body.previousGeneration, body.digest, body.fileId, body.size).all();
         receipt = await find();
-        if (matches(receipt) && route === '/commit' && typeof body.baseFileId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(body.baseFileId) && body.baseFileId !== body.fileId) {
-          // Best effort: a missing record only means guests authorize the base in a second step.
-          try { await env.DB.prepare(sql.snapshotBaseRecord).bind(body.world, body.fileId, body.baseFileId).run(); } catch { }
-        }
-        return matches(receipt) ? json(receipt) : json({ error: 'lease conflict' }, 409);
+        if (!matches(receipt)) return json({ error: 'lease conflict' }, 409);
+        await recordBase();
+        return json(receipt);
       }
       if (route === '/release' || route === '/release-status') {
         const find = () => env.DB.prepare(sql.releaseStatus).bind(body.world, body.lease).first();

@@ -6,7 +6,6 @@ import dev.hosthop.storage.WindowsSecretStore;
 import dev.hosthop.storage.GoogleDriveAuthorization;
 import dev.hosthop.storage.DriveCredentialManager;
 import dev.hosthop.storage.GoogleDriveSnapshotStore;
-import dev.hosthop.snapshot.BinaryDelta;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
@@ -166,8 +165,6 @@ public final class HostHopScreen extends Screen {
             if (id == request.get() && Minecraft.getInstance().gui.screen() == this) Util.getPlatform().openUri(uri);
             else manager.cancelAuthorization();
         });
-        Path sessions = Minecraft.getInstance().gameDirectory.toPath().resolve("hosthop").resolve("sessions");
-        Files.createDirectories(sessions);
         // The host may publish a newer snapshot (and a new base) while the browser is open, so
         // grant and then verify against the current head until it stops moving.
         boolean verified = false;
@@ -181,22 +178,23 @@ public final class HostHopScreen extends Screen {
                 manager.authorizeFiles(files, invitation.folder(), open);
                 token = manager.access().accessToken();
             }
-            if (store.isDelta(snapshot.object(), token)) {
-                Path cached = Files.createTempDirectory(sessions, "authorization-").resolve("remote-object.bin");
-                store.downloadRaw(snapshot.object(), cached, token);
-                var base = BinaryDelta.inspect(cached).base();
-                if (!store.canRead(base, token)) {
-                    Minecraft.getInstance().execute(() -> {
-                        if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(true, "screen.hosthop.authorizing_base");
-                    });
-                    manager.authorizeFile(base.fileId(), invitation.folder(), open);
-                    token = manager.access().accessToken();
-                    if (!store.canRead(base, token)) {
-                        // Without this check a wrong or incomplete selection looked like success.
-                        com.mojang.logging.LogUtils.getLogger().warn("HostHop base access still missing after authorization (base {}...)",
-                                base.fileId().substring(0, Math.min(6, base.fileId().length())));
-                        return "screen.hosthop.base_not_granted";
-                    }
+            // The base comes from the service, or else from the delta's header; never download the whole delta here.
+            String baseId = snapshot.baseId();
+            if (baseId.isEmpty()) {
+                var base = store.deltaBase(snapshot.object(), token);
+                if (base != null) baseId = base.fileId();
+            }
+            if (!baseId.isEmpty() && !store.canRead(baseId, token)) {
+                Minecraft.getInstance().execute(() -> {
+                    if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(true, "screen.hosthop.authorizing_base");
+                });
+                manager.authorizeFile(baseId, invitation.folder(), open);
+                token = manager.access().accessToken();
+                if (!store.canRead(baseId, token)) {
+                    // Without this check a wrong or incomplete selection looked like success.
+                    com.mojang.logging.LogUtils.getLogger().warn("HostHop base access still missing after authorization (base {}...)",
+                            baseId.substring(0, Math.min(6, baseId.length())));
+                    return "screen.hosthop.base_not_granted";
                 }
             }
             verified = authority.snapshot(invitation.world()).object().equals(snapshot.object());

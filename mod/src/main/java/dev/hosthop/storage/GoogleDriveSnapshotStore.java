@@ -273,6 +273,29 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         } catch (RuntimeException invalid) { throw new IOException("Invalid Drive access response", invalid); }
     }
 
+    /** Whether an already-authorized account can read the Drive file with this ID. */
+    public boolean canRead(String fileId, String accessToken) throws IOException, InterruptedException {
+        return canRead(new ObjectRef(fileId, null, 0), accessToken);
+    }
+
+    /**
+     * The base a delta depends on, read from the first bytes only; null for a full snapshot.
+     * Avoids downloading a whole delta just to learn which other file must be readable.
+     */
+    public ObjectRef deltaBase(ObjectRef object, String accessToken) throws IOException, InterruptedException {
+        if (object == null || object.fileId() == null || !object.fileId().matches("[A-Za-z0-9_-]{1,200}")
+                || accessToken == null || accessToken.isBlank() || accessToken.length() > 4096
+                || accessToken.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException("Invalid Drive lookup");
+        var request = HttpRequest.newBuilder(URI.create("https://www.googleapis.com/drive/v3/files/" + object.fileId() + "?alt=media"))
+                .timeout(Duration.ofSeconds(30)).header("Authorization", "Bearer " + accessToken)
+                .header("Range", "bytes=0-" + (BinaryDelta.HEADER_PREFIX - 1)).GET().build();
+        var response = transport.send(request);
+        if ((response.status() != 200 && response.status() != 206) || response.body() == null || response.body().length < 8)
+            throw new IOException("Drive snapshot inspection failed");
+        if (!BinaryDelta.hasMagic(java.util.Arrays.copyOf(response.body(), 8))) return null;
+        return BinaryDelta.baseFromHeader(response.body());
+    }
+
     /** Move an explicitly selected, verified checkpoint object to Drive trash. */
     public void trash(ObjectRef object, String folder, String token) throws IOException, InterruptedException {
         if (object == null || object.fileId() == null || !object.fileId().matches("[A-Za-z0-9_-]{1,200}")

@@ -85,7 +85,9 @@ public final class HostWorldRuntime {
     private final AtomicBoolean failed = new AtomicBoolean(), cancelled = new AtomicBoolean(), finishing = new AtomicBoolean();
     private final AtomicBoolean cleaned = new AtomicBoolean();
     private final AtomicBoolean lanStarted = new AtomicBoolean();
-    private final AtomicBoolean checkpointInFlight = new AtomicBoolean();
+    private final AtomicBoolean checkpointInFlight = new AtomicBoolean(), checkpointRunning = new AtomicBoolean();
+    private final ExecutorService checkpointWorker = Executors.newSingleThreadExecutor(r -> daemon(r, "hosthop-checkpoint"));
+    private volatile java.util.concurrent.Future<?> checkpointTask;
     private volatile LeaseCoordinator.Acquisition acquisition;
     private volatile IntegratedServer server;
     private volatile RelayPublisher relay;
@@ -433,16 +435,29 @@ public final class HostWorldRuntime {
             return false;
         }
         try {
-            worker.execute(() -> {
+            // Its own thread, so leaving the world can interrupt it instead of queueing the final save behind its upload.
+            checkpointTask = checkpointWorker.submit(() -> {
+                checkpointRunning.set(true);
                 try { if (createCheckpoint() && manual) tell("screen.hosthop.checkpoint_saved"); }
                 catch (Exception failure) {
                     if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
                     com.mojang.logging.LogUtils.getLogger().warn("HostHop checkpoint failed ({})", failure.getClass().getSimpleName());
-                    tell("screen.hosthop.checkpoint_failed");
-                } finally { checkpointInFlight.set(false); }
+                    if (!finishing.get()) tell("screen.hosthop.checkpoint_failed");
+                } finally { checkpointRunning.set(false); checkpointInFlight.set(false); }
             });
         } catch (RuntimeException rejected) { checkpointInFlight.set(false); return false; }
         return true;
+    }
+
+    /** The final save takes priority: interrupt a checkpoint in progress and wait for it to let go of its files. */
+    private void stopCheckpoint() throws InterruptedException {
+        var task = checkpointTask;
+        if (task == null || task.isDone()) return;
+        task.cancel(true);
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+        while (checkpointRunning.get() && System.nanoTime() - until < 0) Thread.sleep(100);
+        if (checkpointRunning.get()) com.mojang.logging.LogUtils.getLogger().warn("HostHop checkpoint did not stop within 60 s; saving anyway");
+        checkpointInFlight.set(false);
     }
 
     private boolean createCheckpoint() throws Exception {
@@ -595,8 +610,10 @@ public final class HostWorldRuntime {
         if (candidate != server || !finishing.compareAndSet(false, true)) return;
         var keepAlive = new dev.hosthop.world.SaveKeepAlive();
         try { worker.execute(() -> {
-            String shutdownStage = "server stop verification";
+            String shutdownStage = "checkpoint cancellation";
             try {
+                stopCheckpoint();
+                shutdownStage = "server stop verification";
                 candidate.getRunningThread().join(30_000);
                 if (candidate.getRunningThread().isAlive() || !ServerStopSignal.completedFor(candidate) || monitor == null
                         || monitor.hasFailure())
@@ -683,7 +700,7 @@ public final class HostWorldRuntime {
             if ("screen.hosthop.saved_world".equals(lastStatus)) minecraft.execute(minecraft::stop);
         }
     }
-    private void shutdownExecutors() { renewer.shutdownNow(); relayWorker.shutdown(); worker.shutdown(); }
+    private void shutdownExecutors() { renewer.shutdownNow(); relayWorker.shutdown(); checkpointWorker.shutdownNow(); worker.shutdown(); }
     private static Thread daemon(Runnable task, String name) { var thread = new Thread(task, name); thread.setDaemon(true); return thread; }
 
     @SubscribeEvent public static void started(ServerStartedEvent event) { var active = ACTIVE.get(); if (active != null) active.serverStarted(event.getServer()); }

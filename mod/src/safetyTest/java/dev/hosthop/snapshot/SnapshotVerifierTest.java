@@ -104,6 +104,13 @@ public final class SnapshotVerifierTest {
             catch (java.nio.file.FileAlreadyExistsException expected) { }
             try { SnapshotWriter.create(world, world.resolve("nested.zip")); throw new AssertionError("backup inside world"); }
             catch (IOException expected) { }
+            // Identical content must give identical bytes so deltas only carry real changes.
+            Path again = archive.resolveSibling("again.zip");
+            try {
+                Files.setLastModifiedTime(nested.resolve("data.dat"), java.nio.file.attribute.FileTime.fromMillis(86_400_000L));
+                SnapshotWriter.create(world, again);
+                check(Files.mismatch(archive, again) == -1);
+            } finally { Files.deleteIfExists(again); }
         } finally {
             Files.deleteIfExists(restore.resolve("dimension/data.dat"));
             Files.deleteIfExists(restore.resolve("dimension"));

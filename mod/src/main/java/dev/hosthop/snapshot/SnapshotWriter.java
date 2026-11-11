@@ -63,13 +63,13 @@ public final class SnapshotWriter {
         try (var channel = FileChannel.open(realTarget, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
              var zip = new ZipOutputStream(Channels.newOutputStream(channel))) {
             zip.setLevel(1);
-            zip.putNextEntry(new ZipEntry("hosthop-manifest.json"));
+            zip.putNextEntry(entry("hosthop-manifest.json"));
             zip.write(manifest);
             zip.closeEntry();
             byte[] buffer = new byte[1024 * 1024];
             for (var file : files) {
                 var before = attributes(file.path());
-                zip.putNextEntry(new ZipEntry("world/" + file.name()));
+                zip.putNextEntry(entry("world/" + file.name()));
                 var digest = digest();
                 long count = 0;
                 try (var input = Files.newInputStream(file.path(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
@@ -92,6 +92,18 @@ public final class SnapshotWriter {
             channel.force(true);
         }
         return SnapshotVerifier.verify(realTarget);
+    }
+
+    /**
+     * A fixed, time-zone independent entry time keeps the archive bytes identical for identical content.
+     * Otherwise every local header carries the current time and each changes the delta chunk it falls in.
+     * File times are not worth keeping: a restored world gets fresh ones anyway.
+     */
+    private static final java.time.LocalDateTime ENTRY_TIME = java.time.LocalDateTime.of(2000, 1, 1, 0, 0);
+    private static ZipEntry entry(String name) {
+        var entry = new ZipEntry(name);
+        entry.setTimeLocal(ENTRY_TIME);
+        return entry;
     }
 
     private static List<Path> scan(Path root) throws IOException {

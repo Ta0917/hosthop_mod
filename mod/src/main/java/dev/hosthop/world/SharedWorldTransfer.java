@@ -98,14 +98,32 @@ public final class SharedWorldTransfer {
             } finally { if (verifiedCreated) Files.deleteIfExists(verified); }
         }
         var object = storage.upload(upload, folder, token);
-        token = fresh(token);
-        if (!upload.equals(archive) && !storage.canUseBase(checkpointBase, folder, token)) throw new IOException("Checkpoint base unavailable");
-        if (!gate.mayContinueHosting(acquisition.attempt(), nanos.getAsLong(), millis.getAsLong())) throw new IOException("Host lease expired during checkpoint");
-        var operation = new CheckpointRecord(acquisition.world(), java.util.UUID.randomUUID().toString(), acquisition.principal(),
-                acquisition.lease(), acquisition.epoch(), acquisition.generation(), object, upload.equals(archive) ? "full" : "delta", 0);
-        // Same ID and content make a lost response safe to retry.
+        CheckpointRecord operation;
+        try {
+            token = fresh(token);
+            if (!upload.equals(archive) && !storage.canUseBase(checkpointBase, folder, token)) throw new IOException("Checkpoint base unavailable");
+            if (!gate.mayContinueHosting(acquisition.attempt(), nanos.getAsLong(), millis.getAsLong())) throw new IOException("Host lease expired during checkpoint");
+            operation = new CheckpointRecord(acquisition.world(), java.util.UUID.randomUUID().toString(), acquisition.principal(),
+                    acquisition.lease(), acquisition.epoch(), acquisition.generation(), object, upload.equals(archive) ? "full" : "delta", 0);
+        } catch (IOException | InterruptedException | RuntimeException notSent) {
+            // Nothing references the file yet, so it would otherwise stay in Drive forever.
+            discardUnregistered(object, folder, token);
+            throw notSent;
+        }
+        // Same ID and content make a lost response safe to retry. Once sent, the file may be registered,
+        // so it is never trashed from here.
         try { return authority.checkpoint(operation, token, baseId); }
         catch (IOException first) { return authority.checkpoint(operation, token, baseId); }
+    }
+
+    /** Best effort; only for an uploaded checkpoint whose registration was never sent. */
+    private void discardUnregistered(GoogleDriveSnapshotStore.ObjectRef object, String folder, String token) {
+        if (!(storage instanceof GoogleDriveSnapshotStore drive)) return;
+        boolean interrupted = Thread.interrupted();
+        try { drive.trash(object, folder, fresh(token)); }
+        catch (IOException | InterruptedException | RuntimeException failure) {
+            com.mojang.logging.LogUtils.getLogger().warn("HostHop could not trash an unregistered checkpoint ({})", failure.getClass().getSimpleName());
+        } finally { if (interrupted) Thread.currentThread().interrupt(); }
     }
 
     /** A verified, committed full checkpoint can become the next delta base. */
@@ -277,19 +295,22 @@ public final class SharedWorldTransfer {
             // remains available. Check again before retrying an uncertain commit.
             Path downloaded = journal.resolveSibling("recovery-object-" + java.util.UUID.randomUUID() + ".bin");
             boolean downloadedHere = false;
+            String baseId = "";
             try {
                 storage.downloadRaw(new GoogleDriveSnapshotStore.ObjectRef(operation.objectId(), operation.digest(), operation.objectSize()), downloaded, driveToken);
                 downloadedHere = true;
                 if (BinaryDelta.isDelta(downloaded)) {
                     var base = BinaryDelta.inspect(downloaded).base();
                     if (folderId == null || !storage.canUseBase(base, folderId, driveToken)) throw new IOException("Delta base is unavailable during recovery");
+                    baseId = base.fileId();
                 } else SnapshotVerifier.verify(downloaded);
             } finally { if (downloadedHere) Files.deleteIfExists(downloaded); }
             driveToken = fresh(driveToken);
-            try { receipt = authority.commit(operation, driveToken); }
+            // Sending the base lets guests grant the delta and its base on one consent page.
+            try { receipt = authority.commit(operation, driveToken, baseId); }
             catch (IOException failure) {
                 if (!verifiedStopped) throw failure;
-                receipt = authority.recoverStopped(operation, driveToken);
+                receipt = authority.recoverStopped(operation, driveToken, baseId);
             }
         }
         authority.release(operation);

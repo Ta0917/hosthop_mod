@@ -85,6 +85,23 @@ public final class BinaryDelta {
 
     public static Info inspect(Path delta) throws IOException { return parse(delta).info(); }
 
+    /** Bytes that always cover the base reference at the start of a delta. */
+    public static final int HEADER_PREFIX = 8 + 2 + 200 + 32 + 8;
+
+    /** Reads only the base reference from the first bytes of a delta; the rest of the file is not checked. */
+    public static ObjectRef baseFromHeader(byte[] prefix) throws IOException {
+        if (prefix == null || prefix.length < MAGIC.length || !hasMagic(java.util.Arrays.copyOf(prefix, MAGIC.length))) throw new IOException("Invalid delta magic");
+        try (var in = new DataInputStream(new java.io.ByteArrayInputStream(prefix, MAGIC.length, prefix.length - MAGIC.length))) {
+            int idSize = in.readUnsignedShort();
+            if (idSize < 1 || idSize > 200) throw new IOException("Invalid base identifier");
+            byte[] idBytes = in.readNBytes(idSize), baseHash = in.readNBytes(32);
+            if (idBytes.length != idSize || baseHash.length != 32) throw new IOException("Truncated delta header");
+            var base = new ObjectRef(new String(idBytes, StandardCharsets.US_ASCII), HexFormat.of().formatHex(baseHash), in.readLong());
+            validateRef(base);
+            return base;
+        } catch (java.io.EOFException truncated) { throw new IOException("Truncated delta header", truncated); }
+    }
+
     /** Rebuild the exact original full ZIP, then verify both its SHA-256 and all world files. */
     public static void apply(Path delta, Path base, Path target) throws IOException {
         Parsed parsed = parse(delta);

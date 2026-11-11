@@ -21,6 +21,7 @@ public final class BinaryDeltaTest {
         var patch = root.resolve("delta.bin"); BinaryDelta.create(base, baseRef, updated, patch);
         if (Files.size(patch) >= Files.size(updated) / 2) throw new AssertionError("small change produced a large delta");
         if (!BinaryDelta.inspect(patch).base().equals(baseRef)) throw new AssertionError("base reference mismatch");
+        if (!BinaryDelta.baseFromHeader(java.util.Arrays.copyOf(java.nio.file.Files.readAllBytes(patch), BinaryDelta.HEADER_PREFIX)).equals(baseRef)) throw new AssertionError("header base mismatch");
         var restored = root.resolve("restored.zip"); BinaryDelta.apply(patch, base, restored);
         if (Files.mismatch(updated, restored) != -1) throw new AssertionError("delta reconstruction mismatch");
         // Exercise deletion, new directories and changes inside an existing region.

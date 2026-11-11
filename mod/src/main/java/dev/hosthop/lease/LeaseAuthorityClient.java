@@ -457,10 +457,17 @@ public final class LeaseAuthorityClient {
 
     /** Only a verified stopped host may request atomic publication and release of its expired lease. */
     public PublicationRecord recoverStopped(PublicationRecord operation, String driveToken) throws IOException, InterruptedException {
+        return recoverStopped(operation, driveToken, "");
+    }
+
+    /** baseId names the full snapshot a recovered delta depends on; empty for a full. */
+    public PublicationRecord recoverStopped(PublicationRecord operation, String driveToken, String baseId) throws IOException, InterruptedException {
+        if (baseId == null || (!baseId.isEmpty() && !baseId.matches("[A-Za-z0-9_-]{1,200}"))) throw new IllegalArgumentException("Invalid base");
         if (driveToken == null || driveToken.isBlank() || driveToken.length() > 2048 || driveToken.chars().anyMatch(Character::isISOControl))
             throw new IllegalArgumentException("Invalid Drive token");
         var body = publicationBody(operation);
         body.addProperty("driveToken", driveToken);
+        if (!baseId.isEmpty()) body.addProperty("baseFileId", baseId);
         return matchPublication(operation, post("recover-stopped", body));
     }
 
