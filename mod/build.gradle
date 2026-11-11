@@ -18,7 +18,11 @@ tasks.named('wrapper', Wrapper).configure {
 
 // Every build gets its own version (e.g. 0.2.0-dev.202611111530) so jars sent around cannot be mixed up.
 // Pass -PreleaseVersion to build exactly mod_version.
-version = project.hasProperty('releaseVersion') ? mod_version : "${mod_version}.${new Date().format('yyyyMMddHHmm', TimeZone.getTimeZone('Asia/Tokyo'))}"
+// A ValueSource is re-read on every run, so the configuration cache cannot freeze the timestamp.
+abstract class BuildStamp implements org.gradle.api.provider.ValueSource<String, org.gradle.api.provider.ValueSourceParameters.None> {
+    @Override String obtain() { new Date().format('yyyyMMddHHmm', TimeZone.getTimeZone('Asia/Tokyo')) }
+}
+version = project.hasProperty('releaseVersion') ? mod_version : "${mod_version}.${providers.of(BuildStamp) {}.get()}"
 group = mod_group_id
 
 sourceSets.main.resources {
