@@ -543,3 +543,9 @@ idea {
         downloadJavadoc = true
     }
 }
+
+tasks.register('tokenHistoryCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.storage.TokenHistoryTest'
+}

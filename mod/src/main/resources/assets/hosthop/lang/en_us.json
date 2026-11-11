@@ -28,6 +28,8 @@
   "screen.hosthop.authorizing_snapshot": "Select the latest snapshot in your browser",
   "screen.hosthop.authorizing_base": "Allow access to the base snapshot in your browser",
   "screen.hosthop.snapshot_authorized": "Latest snapshot access granted",
+  "screen.hosthop.base_not_granted": "Access to the base data was not granted. Press the button again and select the file in the browser",
+  "screen.hosthop.snapshot_changed": "The shared world was updated while authorizing. Press the button once more",
   "screen.hosthop.snapshot_authorize_failed": "Could not authorize latest snapshot",
   "screen.hosthop.account_mismatch": "Select the Google account already linked to this world",
   "screen.hosthop.base_access_required": "Allow access to the latest data, then try again",
@@ -112,5 +114,7 @@
   "screen.hosthop.saving_world": "Saving the shared world; saving continues after closing the window",
   "screen.hosthop.uploading": "Uploading world: %s%%. Saving continues after closing the window",
   "screen.hosthop.upload_confirming": "Upload complete; confirming save. Saving continues after closing the window",
-  "screen.hosthop.saved_world": "Shared world saved successfully"
+  "screen.hosthop.saved_world": "Shared world saved successfully",
+  "screen.hosthop.saving_title": "Saving the shared world",
+  "screen.hosthop.saving_wait": "Please wait. Closing the window will quit automatically once saving is done"
 }

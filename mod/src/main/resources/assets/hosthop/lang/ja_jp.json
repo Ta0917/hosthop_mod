@@ -28,6 +28,8 @@
   "screen.hosthop.authorizing_snapshot": "ブラウザーで最新データを選択してください",
   "screen.hosthop.authorizing_base": "ブラウザーで基準データへのアクセスも許可してください",
   "screen.hosthop.snapshot_authorized": "最新データへのアクセスを許可しました",
+  "screen.hosthop.base_not_granted": "基準データへのアクセスが許可されていません。もう一度ボタンを押し、ブラウザーでファイルを選択してください",
+  "screen.hosthop.snapshot_changed": "認可中に共有ワールドが更新されました。もう一度ボタンを押してください",
   "screen.hosthop.snapshot_authorize_failed": "最新データを認証できませんでした",
   "screen.hosthop.account_mismatch": "連携済みのGoogleアカウントを選択してください",
   "screen.hosthop.base_access_required": "最新データへのアクセスを許可してから、もう一度お試しください",
@@ -112,5 +114,7 @@
   "screen.hosthop.saving_world": "共有ワールドを保存中です。画面を閉じても保存を続けます",
   "screen.hosthop.uploading": "保存データをアップロード中: %s%%。画面を閉じても保存を続けます",
   "screen.hosthop.upload_confirming": "アップロード完了、保存を確定中です。画面を閉じても保存を続けます",
-  "screen.hosthop.saved_world": "共有ワールドを保存しました"
+  "screen.hosthop.saved_world": "共有ワールドを保存しました",
+  "screen.hosthop.saving_title": "共有ワールドを保存しています",
+  "screen.hosthop.saving_wait": "完了するまでこのままお待ちください。ウィンドウを閉じても保存後に自動で終了します"
 }

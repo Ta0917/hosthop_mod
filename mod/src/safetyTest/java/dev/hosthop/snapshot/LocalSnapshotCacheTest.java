@@ -18,8 +18,10 @@ public final class LocalSnapshotCacheTest {
         byte[] altered = content.clone(); altered[0] ^= 1;
         var expected = new ObjectRef("object", HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content)), content.length);
         Files.write(source, altered);
+        if (LocalSnapshotCache.containsMatching(sessions, expected)) throw new AssertionError("corrupt cache reported present");
         if (LocalSnapshotCache.copyMatching(sessions, target, expected) || Files.exists(target)) throw new AssertionError("stale cache accepted");
         Files.write(source, content);
+        if (!LocalSnapshotCache.containsMatching(sessions, expected)) throw new AssertionError("valid cache not detected");
         if (!LocalSnapshotCache.copyMatching(sessions, target, expected) || Files.mismatch(source, target) != -1) throw new AssertionError("matching cache missed");
         try { LocalSnapshotCache.copyMatching(sessions, target, expected); throw new AssertionError("destination overwritten"); }
         catch (IOException expectedFailure) { }

@@ -21,6 +21,9 @@ public final class SaveFailureMonitor implements AutoCloseable {
             @Override public void append(LogEvent event) {
                 // Our own backup/network warnings do not mean Minecraft's save failed.
                 if (event.getLoggerName() != null && event.getLoggerName().startsWith("dev.hosthop.")) return;
+                // Closing the in-process client connection during a normal quit is not a failed save.
+                if (event.getThrown() instanceof java.nio.channels.ClosedChannelException
+                        && "Exception caught in connection".equals(event.getMessage().getFormattedMessage())) return;
                 if (event.getLevel().isMoreSpecificThan(Level.ERROR)) { failed.set(true); return; }
                 if (event.getLevel().isMoreSpecificThan(Level.WARN)) {
                     String message = event.getMessage().getFormattedMessage().toLowerCase(Locale.ROOT);

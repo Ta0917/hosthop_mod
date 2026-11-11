@@ -47,7 +47,10 @@ public final class GuestReconnect {
     void connecting(LeaseAuthorityClient.Endpoint endpoint, ReconnectController.Attempt attempt) {
         address = endpoint.address(); epoch = endpoint.epoch(); this.attempt = attempt; reconnecting = true;
     }
-    void cancel() { if (session != null) controller.cancel(session); if (current == this) current = null; }
+    void cancel() {
+        if (session != null) controller.cancel(session);
+        if (current == this) { current = null; GuestPrefetch.stop(); }
+    }
 
     @SubscribeEvent public static void login(ClientPlayerNetworkEvent.LoggingIn event) {
         var value = current;
@@ -58,6 +61,7 @@ public final class GuestReconnect {
         if (value.reconnecting && !value.controller.connected(value.session, value.attempt)) { value.cancel(); return; }
         value.reconnecting = false; value.attempt = null;
         value.waitStarted = 0;
+        GuestPrefetch.start(value.invitation, value.authority);
     }
 
     @SubscribeEvent public static void logout(ClientPlayerNetworkEvent.LoggingOut event) {

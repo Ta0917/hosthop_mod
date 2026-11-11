@@ -61,6 +61,8 @@ public final class WindowsSecretStoreTest {
             var expired = new DriveCredentialManager(store, new GoogleDriveAuthorization("client-id", "client-secret", request -> { throw new GoogleDriveAuthorization.InvalidGrant(); }));
             try { expired.access(); throw new AssertionError("expired credentials accepted"); }
             catch (DriveCredentialManager.ReauthorizationRequired expected) { }
+            var diary = directory.resolve(TokenHistory.FILE);
+            check(Files.readString(diary).contains("INVALID_GRANT") && !Files.readString(diary).contains("client-secret"));
             var offline = new DriveCredentialManager(store, new GoogleDriveAuthorization("client-id", "client-secret", request -> { throw new IOException("offline"); }));
             try { offline.access(); throw new AssertionError("network failure accepted"); }
             catch (DriveCredentialManager.ReauthorizationRequired wrong) { throw new AssertionError("network failure misclassified", wrong); }
@@ -72,6 +74,7 @@ public final class WindowsSecretStoreTest {
             System.out.println("Windows encrypted credential checks passed");
         } finally {
             Files.deleteIfExists(file);
+            Files.deleteIfExists(directory.resolve(TokenHistory.FILE));
             Files.delete(directory);
         }
     }

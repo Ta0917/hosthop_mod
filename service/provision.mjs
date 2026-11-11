@@ -34,6 +34,8 @@ try {
   }
   await writeFile(join(output, 'members-secrets.json'), JSON.stringify(members) + '\n', { flag: 'wx', mode: 0o600 });
   await writeFile(join(output, 'worlds-secrets.json'), JSON.stringify([{ id: config.world, folder: config.drive_folder }]) + '\n', { flag: 'wx', mode: 0o600 });
+  // Ready-made input for `wrangler deploy --secrets-file`; both values are the JSON text of the two files above.
+  await writeFile(join(output, 'worker-secrets.json'), JSON.stringify({ MEMBERS_JSON: JSON.stringify(members), WORLDS_JSON: JSON.stringify([{ id: config.world, folder: config.drive_folder }]) }) + '\n', { flag: 'wx', mode: 0o600 });
   // World identifiers are restricted to the ASCII identifier grammar above.
   await writeFile(join(output, 'initialize-world.sql'), `INSERT INTO worlds (id) VALUES ('${config.world}');\n`, { flag: 'wx', mode: 0o600 });
   console.log('Configuration and invitations generated. Treat the output directory as secret.');

@@ -117,6 +117,20 @@ public final class HostWorldRuntime {
         return true;
     }
     public static boolean active() { return ACTIVE.get() != null; }
+    private static volatile boolean quitAfterSave;
+    /** True from the moment the world is open until the final upload and cleanup are finished. */
+    public static boolean closeBlocked() { var runtime = ACTIVE.get(); return runtime != null && runtime.server != null && !runtime.cleaned.get(); }
+    /** True while the world has stopped and the final snapshot is still being published. */
+    public static boolean savingInProgress() { var runtime = ACTIVE.get(); return runtime != null && (runtime.finishing.get() || (runtime.server != null && !runtime.server.isRunning())) && !runtime.cleaned.get(); }
+    /** Leave the world normally; the process closes by itself once the save has succeeded. */
+    public static void requestQuitAfterSave() {
+        var runtime = ACTIVE.get();
+        if (runtime == null) return;
+        quitAfterSave = true;
+        var minecraft = runtime.minecraft;
+        if (runtime.server != null && !runtime.finishing.get() && minecraft.level != null)
+            minecraft.execute(() -> { if (minecraft.level != null) minecraft.disconnectFromWorld(net.minecraft.client.multiplayer.ClientLevel.DEFAULT_QUIT_MESSAGE); });
+    }
     public static boolean hostingReady() { var runtime = ACTIVE.get(); return runtime != null && runtime.relayReady && !runtime.failed.get(); }
     public static String lastStatus() { return lastStatus; }
     public static int uploadPercent() { return uploadPercent; }
@@ -592,6 +606,11 @@ public final class HostWorldRuntime {
         try { if (processLock != null) processLock.release(); } catch (IOException ignored) { }
         try { if (processChannel != null) processChannel.close(); } catch (IOException ignored) { }
         ACTIVE.compareAndSet(this, null);
+        if (quitAfterSave) {
+            quitAfterSave = false;
+            // Only close on success; a failed save must stay visible on the title screen.
+            if ("screen.hosthop.saved_world".equals(lastStatus)) minecraft.execute(minecraft::stop);
+        }
     }
     private void shutdownExecutors() { renewer.shutdownNow(); relayWorker.shutdown(); worker.shutdown(); }
     private static Thread daemon(Runnable task, String name) { var thread = new Thread(task, name); thread.setDaemon(true); return thread; }

@@ -46,9 +46,14 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
     private final Downloader downloader;
 
     public GoogleDriveSnapshotStore() {
+        this(0);
+    }
+    /** A nonzero limit bounds background prefetch bandwidth without changing foreground transfers. */
+    public GoogleDriveSnapshotStore(long bytesPerSecond) {
+        if (bytesPerSecond != 0 && (bytesPerSecond < 65536 || bytesPerSecond > 104857600)) throw new IllegalArgumentException("Invalid download rate");
         var client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).followRedirects(HttpClient.Redirect.NEVER).build();
         this.transport = httpTransport(client);
-        this.downloader = httpDownloader(client);
+        this.downloader = httpDownloader(client, bytesPerSecond);
     }
     GoogleDriveSnapshotStore(Transport transport) { this(transport, null); }
     GoogleDriveSnapshotStore(Transport transport, Downloader downloader) { this.transport = transport; this.downloader = downloader; }
@@ -338,10 +343,10 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         };
     }
 
-    private static Downloader httpDownloader(HttpClient client) {
+    private static Downloader httpDownloader(HttpClient client, long bytesPerSecond) {
         return (request, output, size, expectedHash, progress) -> {
             var pending = client.sendAsync(request, info -> info.statusCode() == 200
-                    ? new FileBody(output, size, expectedHash, progress) : new RejectedBody());
+                    ? new FileBody(output, size, expectedHash, progress, bytesPerSecond) : new RejectedBody());
             try { return pending.get(2, TimeUnit.HOURS).statusCode(); }
             catch (TimeoutException | ExecutionException failure) {
                 pending.cancel(true); throw new IOException("Drive download failed", failure);
@@ -365,12 +370,13 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         private final String expectedHash;
         private final MessageDigest hash;
         private final java.util.function.LongConsumer progress;
+        private final long bytesPerSecond, startedNanos;
         private Flow.Subscription subscription;
         private long count;
         private long lastPercent = -1;
-        FileBody(FileChannel output, long expectedSize, String expectedHash, java.util.function.LongConsumer progress) {
+        FileBody(FileChannel output, long expectedSize, String expectedHash, java.util.function.LongConsumer progress, long bytesPerSecond) {
             this.output = output; this.expectedSize = expectedSize; this.expectedHash = expectedHash;
-            this.progress = progress;
+            this.progress = progress; this.bytesPerSecond = bytesPerSecond; this.startedNanos = System.nanoTime();
             try { this.hash = digest(); } catch (IOException unavailable) { throw new IllegalStateException(unavailable); }
         }
         @Override public CompletionStage<Void> getBody() { return result; }
@@ -386,6 +392,11 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
                 }
                 long percent = Math.min(99, count * 100 / expectedSize);
                 if (percent != lastPercent) { progress.accept(percent); lastPercent = percent; }
+                if (bytesPerSecond > 0) {
+                    long due = (count / bytesPerSecond) * 1_000_000_000L + (count % bytesPerSecond) * 1_000_000_000L / bytesPerSecond;
+                    long delay = due - (System.nanoTime() - startedNanos);
+                    if (delay > 0) java.util.concurrent.locks.LockSupport.parkNanos(delay);
+                }
                 subscription.request(1);
             } catch (IOException | RuntimeException failure) { subscription.cancel(); result.completeExceptionally(failure); }
         }

@@ -30,6 +30,8 @@ public final class WindowsSecretStore {
         this.path = path.toAbsolutePath().normalize();
     }
 
+    /** Folder that holds the encrypted file; used only for plain, non-secret diagnostics. */
+    public Path directory() { return path.getParent(); }
     public boolean exists() { return !Files.notExists(path, LinkOption.NOFOLLOW_LINKS); }
 
     /** Keys and values are encrypted before touching disk. Parent directory must exist. */

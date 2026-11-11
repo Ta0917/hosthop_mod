@@ -145,38 +145,60 @@ public final class HostHopScreen extends Screen {
                 var vault = new WindowsSecretStore(secretPath());
                 var invitation = Invitation.fromSecrets(vault.load());
                 var authority = new LeaseAuthorityClient(URI.create(invitation.authority()), invitation.memberToken());
-                var snapshot = authority.snapshot(invitation.world());
                 var manager = new DriveCredentialManager(vault, new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret()));
                 activeAuthorization = manager;
-                manager.authorizeFile(snapshot.object().fileId(), invitation.folder(), uri -> Minecraft.getInstance().execute(() -> {
-                    if (id == request.get() && Minecraft.getInstance().gui.screen() == this) Util.getPlatform().openUri(uri);
-                    else manager.cancelAuthorization();
-                }));
-                var store = new GoogleDriveSnapshotStore();
-                var token = manager.access().accessToken();
-                if (store.isDelta(snapshot.object(), token)) {
-                    Path sessions = Minecraft.getInstance().gameDirectory.toPath().resolve("hosthop").resolve("sessions");
-                    Files.createDirectories(sessions);
-                    Path cached = Files.createTempDirectory(sessions, "authorization-").resolve("remote-object.bin");
-                    store.downloadRaw(snapshot.object(), cached, token);
-                    var base = BinaryDelta.inspect(cached).base();
-                    if (!store.canRead(base, token)) {
-                        Minecraft.getInstance().execute(() -> {
-                            if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(true, "screen.hosthop.authorizing_base");
-                        });
-                        manager.authorizeFile(base.fileId(), invitation.folder(), uri -> Minecraft.getInstance().execute(() -> {
-                            if (id == request.get() && Minecraft.getInstance().gui.screen() == this) Util.getPlatform().openUri(uri);
-                            else manager.cancelAuthorization();
-                        }));
-                    }
-                }
-                finish(id, "screen.hosthop.snapshot_authorized");
+                finish(id, ensureSnapshotAccess(id, invitation, authority, manager));
             } catch (DriveCredentialManager.AccountMismatch failure) { finish(id, "screen.hosthop.account_mismatch"); }
             catch (DriveCredentialManager.ReauthorizationRequired failure) { finish(id, "screen.hosthop.reauthorize_drive"); }
             catch (DriveCredentialManager.AuthorizationRequired failure) { finish(id, "screen.hosthop.authorize_first"); }
             catch (Exception failure) { finish(id, "screen.hosthop.snapshot_authorize_failed"); }
             finally { activeAuthorization = null; }
         });
+    }
+
+    /**
+     * Makes the newest snapshot and its delta base readable for this account, opening the browser only for
+     * what is still missing. Returns the status to show. Runs off the game thread.
+     */
+    private String ensureSnapshotAccess(long id, Invitation invitation, LeaseAuthorityClient authority, DriveCredentialManager manager) throws Exception {
+        var store = new GoogleDriveSnapshotStore();
+        java.util.function.Consumer<URI> open = uri -> Minecraft.getInstance().execute(() -> {
+            if (id == request.get() && Minecraft.getInstance().gui.screen() == this) Util.getPlatform().openUri(uri);
+            else manager.cancelAuthorization();
+        });
+        Path sessions = Minecraft.getInstance().gameDirectory.toPath().resolve("hosthop").resolve("sessions");
+        Files.createDirectories(sessions);
+        // The host may publish a newer snapshot (and a new base) while the browser is open, so
+        // grant and then verify against the current head until it stops moving.
+        boolean verified = false;
+        for (int round = 0; round < 3 && !verified; round++) {
+            var snapshot = authority.snapshot(invitation.world());
+            var token = manager.access().accessToken();
+            if (!store.canRead(snapshot.object(), token)) {
+                manager.authorizeFile(snapshot.object().fileId(), invitation.folder(), open);
+                token = manager.access().accessToken();
+            }
+            if (store.isDelta(snapshot.object(), token)) {
+                Path cached = Files.createTempDirectory(sessions, "authorization-").resolve("remote-object.bin");
+                store.downloadRaw(snapshot.object(), cached, token);
+                var base = BinaryDelta.inspect(cached).base();
+                if (!store.canRead(base, token)) {
+                    Minecraft.getInstance().execute(() -> {
+                        if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(true, "screen.hosthop.authorizing_base");
+                    });
+                    manager.authorizeFile(base.fileId(), invitation.folder(), open);
+                    token = manager.access().accessToken();
+                    if (!store.canRead(base, token)) {
+                        // Without this check a wrong or incomplete selection looked like success.
+                        com.mojang.logging.LogUtils.getLogger().warn("HostHop base access still missing after authorization (base {}...)",
+                                base.fileId().substring(0, Math.min(6, base.fileId().length())));
+                        return "screen.hosthop.base_not_granted";
+                    }
+                }
+            }
+            verified = authority.snapshot(invitation.world()).object().equals(snapshot.object());
+        }
+        return verified ? "screen.hosthop.snapshot_authorized" : "screen.hosthop.snapshot_changed";
     }
 
     private void authorizeDrive() {
@@ -235,6 +257,21 @@ public final class HostHopScreen extends Screen {
                 Path pending = secretPath().getParent().resolve("pending-host.dat");
                 boolean confirmedUnclean = Files.exists(pending) && "unclean-confirmed".equals(new WindowsSecretStore(pending).load().get("stage"));
                 Minecraft minecraft = Minecraft.getInstance();
+                boolean willHost = !host.held() || confirmedUnclean || (host.endpoint() == null && Files.exists(pending));
+                if (willHost && !(host.recoveryRequired() && !Files.exists(pending))) {
+                    // Becoming host needs the newest snapshot and its base; ask for them now, in this one click,
+                    // instead of failing later and sending the player to a separate button.
+                    try {
+                        minecraft.execute(() -> { if (id == request.get() && minecraft.gui.screen() == this) busy(true, "screen.hosthop.authorizing_snapshot"); });
+                        var manager = new DriveCredentialManager(new WindowsSecretStore(secretPath()), new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret()));
+                        activeAuthorization = manager;
+                        String result = ensureSnapshotAccess(id, invitation, authority, manager);
+                        if (result.equals("screen.hosthop.base_not_granted") || result.equals("screen.hosthop.snapshot_changed")) { finish(id, result); return; }
+                    } catch (Exception skipped) {
+                        // A brand-new world has no snapshot yet; the runtime reports any real problem itself.
+                        com.mojang.logging.LogUtils.getLogger().info("HostHop snapshot access pre-check skipped: {}", skipped.getClass().getSimpleName());
+                    } finally { activeAuthorization = null; }
+                }
                 minecraft.execute(() -> {
                     if (id != request.get() || minecraft.gui.screen() != this) return;
                     // A previous local pre-launch attempt may still own the lease.

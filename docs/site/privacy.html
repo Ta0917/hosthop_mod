@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>プライバシーポリシー - HostHop</title><link rel="stylesheet" href="style.css"></head><body><main>
+<h1>プライバシーポリシー</h1>
+<p class="muted">HostHop（開発者: Ta0917）／最終更新: 2026年11月11日</p>
+<p>HostHop は、Minecraft の共有ワールド MOD です。このポリシーは、HostHop が、どの情報を扱い、どう使うかを説明します。</p>
+
+<h2>1. 扱う情報</h2>
+<table>
+<tr><th>情報</th><th>使い道</th><th>保存場所</th></tr>
+<tr><td>Google アカウントの認可情報（アクセストークン、更新トークン）</td><td>利用者自身の Google Drive に、ワールドのデータを保存・取得する</td><td>利用者のPCだけ。暗号化して保存します（Windows の資格情報保護を使用）。開発者には送られません。</td></tr>
+<tr><td>Google Drive のファイル（ワールドのスナップショット、バックアップ）</td><td>共有ワールドの保存と、ホスト交代時の復元</td><td>利用者が指定した、利用者自身の Google Drive のフォルダー</td></tr>
+<tr><td>ワールドID、参加者ID、招待コードのトークン（ハッシュ化したもの）</td><td>参加者の確認、誰がホストかの管理（リース）</td><td>開発者が運用する Cloudflare（Workers と D1）</td></tr>
+<tr><td>保存世代、Drive のファイルID・サイズ・ハッシュ値、ホストの接続先アドレス</td><td>最新データの特定、ホストへの接続案内</td><td>同上（Cloudflare）</td></tr>
+<tr><td>MOD の識別子・バージョン・ファイルのハッシュ値、設定ファイルのハッシュ値</td><td>参加者どうしの MOD 構成の食い違いの検出</td><td>同上（Cloudflare）</td></tr>
+</table>
+<p>ワールドの内容そのものは、利用者の Google Drive にだけ保存され、開発者のサーバーには保存されません。</p>
+
+<h2>2. Google ユーザーデータの扱い</h2>
+<ul>
+<li>HostHop が要求する Google の権限は、<code>https://www.googleapis.com/auth/drive.file</code> だけです。HostHop が作成した、または、利用者が選択したファイルにだけ、アクセスします。</li>
+<li>Drive 上のそのほかのファイル、連絡先、メール、個人情報は、読み取りません。</li>
+<li>アップロードしたファイルの確認のために、アクセストークンが、開発者の Cloudflare Worker に一時的に送られます。Worker は、そのトークンを使って、Google Drive API でファイルの名前・サイズ・ハッシュ値だけを確認し、トークンは、保存しない設計です。</li>
+<li>Google ユーザーデータは、HostHop の機能の提供だけに使い、広告、販売、第三者への提供、人手による閲覧、機械学習の学習には、使いません。</li>
+<li>HostHop による、Google API から受け取った情報の使用と、他のアプリへの転送は、<a href="https://developers.google.com/terms/api-services-user-data-policy">Google API サービスのユーザーデータに関するポリシー</a>（限定使用の要件を含む）に、準拠します。</li>
+</ul>
+
+<h2>3. 第三者サービス</h2>
+<ul>
+<li><strong>Google Drive</strong>: ワールドの保存先です。</li>
+<li><strong>Cloudflare</strong>: 管理用サーバー（Workers と D1）の運用に使います。Cloudflare が、運用上のログを、自社の方針で、記録することがあります。</li>
+<li><strong>e4mc</strong>: ホストのワールドに、外部から接続するための、リレーです。Minecraft の通信が、e4mc のリレーを経由します。e4mc は、HostHop とは別の、第三者の MOD です。</li>
+</ul>
+
+<h2>4. 保存期間と削除</h2>
+<ul>
+<li>利用者のPCの認可情報は、<code>config\hosthop\credentials.dat</code> を削除すれば、消えます。</li>
+<li>Google の権限は、<a href="https://myaccount.google.com/permissions">Google アカウントの権限の管理ページ</a>で、いつでも、取り消せます。</li>
+<li>Drive のワールドデータは、利用者が、自分の Drive から、削除できます。</li>
+<li>Cloudflare 上の記録の削除を希望する場合は、下記の連絡先へ、ご連絡ください。</li>
+</ul>
+
+<h2>5. 利用対象</h2>
+<p>HostHop は、招待された、少人数の参加者だけが使う、実験的なソフトウェアです。不特定多数への提供や、13歳未満の方の利用は、想定していません。</p>
+
+<h2>6. 変更</h2>
+<p>このポリシーは、必要に応じて、改訂します。重要な変更は、このページに、掲載します。</p>
+
+<h2>7. 連絡先</h2>
+<p><a href="https://github.com/Ta0917/hosthop/issues">GitHub Issues</a> からご連絡ください。</p>
+<nav><a href="index.html">ホーム</a><a href="privacy.html">プライバシーポリシー</a><a href="terms.html">利用規約</a></nav>
+<p class="muted">English summary: HostHop requests only the Google Drive <code>drive.file</code> scope. OAuth tokens stay encrypted on the user's PC. A Cloudflare Worker stores only world/lease records, Drive file IDs and hashes, and mod/config hashes; it does not store Google tokens. Google user data is used solely to provide the app's features and is never sold, shared, or used for advertising or AI training. HostHop's use of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements.</p>
+</main></body></html>

@@ -10,3 +10,4 @@ run/
 service/wrangler.toml
 service/.dev.vars
 service/*-secrets.json
+mod/logs/

@@ -19,6 +19,7 @@ public final class DriveCredentialManager {
     }
     private static final String REFRESH = "drive_refresh_token";
     private static final String FOLDER = "drive_folder_id";
+    private static final String ISSUED = "drive_token_issued_at";
     private final WindowsSecretStore vault;
     private final GoogleDriveAuthorization authorization;
     private GoogleDriveAuthorization.Tokens cached;
@@ -45,6 +46,7 @@ public final class DriveCredentialManager {
             if (generation != authorizationGeneration.get()) throw new IOException("Drive authorization cancelled");
             if (tokens.refreshToken() == null) throw new IOException("Google did not provide a refresh token");
             synchronized (this) { save(tokens); cache(tokens); }
+            TokenHistory.record(vault.directory(), "LINKED the user completed Drive authorization; a new token was issued");
         } finally {
             activeSession = null;
             authorizing.set(false);
@@ -80,6 +82,7 @@ public final class DriveCredentialManager {
             var tokens = authorization.refresh(refresh, expectedFolder);
             if (!originalAccount.equals(authorization.accountId(tokens.accessToken()))) throw new AccountMismatch();
             synchronized (this) { save(tokens); cache(tokens); }
+            TokenHistory.record(vault.directory(), "FILE_ACCESS the user granted access to a shared snapshot file");
             }
         } finally {
             activeSession = null;
@@ -96,18 +99,30 @@ public final class DriveCredentialManager {
         if (refresh == null || folder == null) throw new AuthorizationRequired();
         GoogleDriveAuthorization.Tokens tokens;
         try { tokens = authorization.refresh(refresh, folder); }
-        catch (GoogleDriveAuthorization.InvalidGrant expired) { throw new ReauthorizationRequired(expired); }
-        if (!refresh.equals(tokens.refreshToken())) save(tokens);
+        catch (GoogleDriveAuthorization.InvalidGrant expired) {
+            String age = TokenHistory.age(secrets.get(ISSUED), java.time.Instant.now());
+            TokenHistory.record(vault.directory(), "INVALID_GRANT refresh was rejected; token issued "
+                    + (age == null ? "at an unknown time (linked before this log existed)" : age + " ago")
+                    + ". A limit of about 7 days applies while the Google OAuth app is in Testing; otherwise it was revoked or the password changed.");
+            throw new ReauthorizationRequired(expired);
+        }
+        if (!refresh.equals(tokens.refreshToken())) save(tokens, "ROTATED Google replaced the refresh token");
         cache(tokens);
         return tokens;
     }
 
-    private void save(GoogleDriveAuthorization.Tokens tokens) throws IOException {
+    private void save(GoogleDriveAuthorization.Tokens tokens) throws IOException { save(tokens, null); }
+
+    private void save(GoogleDriveAuthorization.Tokens tokens, String event) throws IOException {
         var secrets = new HashMap<String, String>();
         if (vault.exists()) secrets.putAll(vault.load());
+        boolean changed = !tokens.refreshToken().equals(secrets.get(REFRESH));
         secrets.put(REFRESH, tokens.refreshToken());
         secrets.put(FOLDER, tokens.folderId());
+        // Only the moment of issue is recorded; it is not secret and lets an expiry be explained later.
+        if (changed || secrets.get(ISSUED) == null) secrets.put(ISSUED, Long.toString(java.time.Instant.now().getEpochSecond()));
         vault.save(secrets);
+        if (changed && event != null) TokenHistory.record(vault.directory(), event);
     }
 
     private void cache(GoogleDriveAuthorization.Tokens tokens) {
