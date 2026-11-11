@@ -83,6 +83,31 @@ public final class LeaseCoordinator {
         }
     }
 
+    /**
+     * Like {@link #renew}, but a transport failure (timeout, connection loss, 5xx, 408/429) keeps the
+     * current deadline instead of requiring a stop. A rejection by the authority still stops the host.
+     * The caller must stop the host itself once {@link LocalHostGate#leaseUsableFor} turns false.
+     */
+    public boolean renewTolerant(Acquisition acquisition) throws IOException, InterruptedException {
+        checkOwner(acquisition);
+        if (acquisition.epoch < 1) return false;
+        var renewal = gate.beginRenewal(acquisition.attempt, nanos.getAsLong(), millis.getAsLong());
+        if (renewal == null) return false;
+        try {
+            var grant = client.renew(acquisition.world, acquisition.lease, acquisition.duration, acquisition.epoch, acquisition.margin);
+            return gate.acceptRenewal(acquisition.attempt, renewal, grant.epoch(), grant.generation(), grant.deadline(), nanos.getAsLong(), millis.getAsLong());
+        } catch (LeaseAuthorityClient.LeaseRejected rejected) {
+            gate.renewalFailed(acquisition.attempt, renewal);
+            throw rejected;
+        } catch (IOException transportFailure) {
+            gate.renewalDeferred(acquisition.attempt, renewal);
+            throw transportFailure;
+        } catch (InterruptedException | RuntimeException failure) {
+            gate.renewalFailed(acquisition.attempt, renewal);
+            throw failure;
+        }
+    }
+
     /** Retryable only before the host starts; a lost acknowledgement leaves ABORTING. */
     public boolean abortBeforeHosting(Acquisition acquisition) throws IOException, InterruptedException {
         checkOwner(acquisition);

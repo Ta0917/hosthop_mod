@@ -44,6 +44,13 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
     @FunctionalInterface interface Downloader { int receive(HttpRequest request, FileChannel output, long size, String digest, java.util.function.LongConsumer progress) throws IOException, InterruptedException; }
     private final Transport transport;
     private final Downloader downloader;
+    private volatile DriveTokenSource tokenSource;
+
+    /**
+     * Long uploads outlive a single access token (about one hour). With a source, every chunk uses a
+     * current token and a 401 is retried with a refreshed one; without it the caller's token is used throughout.
+     */
+    public void setTokenSource(DriveTokenSource source) { tokenSource = source; }
 
     public GoogleDriveSnapshotStore() {
         this(0);
@@ -123,6 +130,7 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         if (!trustedSession(session)) throw new IOException("Untrusted Drive upload session");
         long offset = 0;
         int retries = 0;
+        String token = accessToken;
         progress.accept(0);
         Reply finalResponse = null;
         try (var input = FileChannel.open(archive, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
@@ -133,15 +141,24 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
                 input.position(offset);
                 while (buffer.hasRemaining()) if (input.read(buffer) < 0) throw new IOException("Snapshot changed during upload");
                 long last = offset + length - 1;
+                token = currentToken(token);
                 var upload = HttpRequest.newBuilder(session).timeout(Duration.ofMinutes(2))
-                        .header("Authorization", "Bearer " + accessToken).header("Content-Type", "application/zip")
+                        .header("Authorization", "Bearer " + token).header("Content-Type", "application/zip")
                         .header("Content-Range", "bytes " + offset + "-" + last + "/" + size)
                         .PUT(HttpRequest.BodyPublishers.ofByteArray(chunk)).build();
                 try { response = transport.send(upload); }
                 catch (IOException interrupted) { response = null; }
-                if (response == null || response.status() >= 500 && response.status() <= 599) {
+                if (response != null && (response.status() == 401 || rateLimited(response))) {
                     if (++retries > 4) throw new IOException("Drive upload could not be resumed");
-                    response = uploadStatus(session, size, accessToken);
+                    var source = tokenSource;
+                    if (response.status() == 401) {
+                        if (source == null) throw new IOException("Drive authorization expired during upload");
+                        token = source.accessToken();
+                    } else Thread.sleep(1000L << retries);
+                    response = uploadStatus(session, size, token);
+                } else if (response == null || response.status() >= 500 && response.status() <= 599) {
+                    if (++retries > 4) throw new IOException("Drive upload could not be resumed");
+                    response = uploadStatus(session, size, token);
                 }
                 if (response.status() == 200 || response.status() == 201) {
                     if (last != size - 1) throw new IOException("Drive completed upload prematurely");
@@ -161,6 +178,23 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         }
         if (!hashFile(archive).equals(expectedHash)) throw new IOException("Snapshot changed during upload");
         return validateMetadata(finalResponse, folderId, name, expectedHash, size);
+    }
+
+    private String currentToken(String fallback) throws IOException, InterruptedException {
+        var source = tokenSource;
+        if (source == null) return fallback;
+        String token = source.accessToken();
+        if (token == null || token.isBlank() || token.length() > 4096 || token.chars().anyMatch(Character::isISOControl))
+            throw new IOException("Invalid refreshed Drive token");
+        return token;
+    }
+
+    /** Drive reports quota throttling as 429, or as 403 with a rate-limit reason. */
+    private static boolean rateLimited(Reply response) {
+        if (response.status() == 429) return true;
+        if (response.status() != 403 || response.body() == null) return false;
+        String body = new String(response.body(), StandardCharsets.UTF_8);
+        return body.contains("rateLimitExceeded") || body.contains("userRateLimitExceeded");
     }
 
     private Reply uploadStatus(URI session, long size, String token) throws IOException, InterruptedException {

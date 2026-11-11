@@ -45,6 +45,10 @@ public final class LeaseAuthorityClient {
     public static final class LeaseExpired extends IOException {
         private LeaseExpired() { super("The original lease is no longer active"); }
     }
+    /** The authority answered and refused the lease request (4xx other than 408/429); retrying cannot help. */
+    public static final class LeaseRejected extends IOException {
+        private LeaseRejected() { super("The lease authority rejected the request"); }
+    }
     public record Grant(long epoch, long generation, ConservativeLeaseDeadline deadline) {}
     public record Endpoint(String world, long epoch, long generation, long revision, String address,
                            ConservativeLeaseDeadline deadline) {}
@@ -526,6 +530,8 @@ public final class LeaseAuthorityClient {
         long startNanos = nanos.getAsLong();
         long startMillis = millis.getAsLong();
         Reply reply = exchange.send(request);
+        if (reply != null && reply.status() >= 400 && reply.status() < 500 && reply.status() != 408 && reply.status() != 429)
+            throw new LeaseRejected();
         if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES)
             throw new IOException("Lease authority did not grant the request");
         var fields = parseFields(reply.body());

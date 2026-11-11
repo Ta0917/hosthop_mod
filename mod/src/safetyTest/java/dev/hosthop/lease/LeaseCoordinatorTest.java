@@ -33,6 +33,33 @@ public final class LeaseCoordinatorTest {
         check(gate.phase() == LocalHostGate.Phase.STOP_REQUIRED);
         check(!coordinator.acquire(acquisition));
 
+        // Tolerant renewal: a lost response keeps hosting on the current lease; a refusal stops it.
+        var status = new java.util.concurrent.atomic.AtomicInteger(200);
+        var tolerantClient = new LeaseAuthorityClient(URI.create("https://authority.example"), "a".repeat(43), request -> {
+            if (response.get() == null) throw new IOException("simulated connection loss");
+            return new LeaseAuthorityClient.Reply(status.get(), response.get());
+        }, () -> 0, () -> 0);
+        var tolerantGate = new LocalHostGate();
+        var tolerant = new LeaseCoordinator(tolerantGate, tolerantClient, () -> 0, () -> 0);
+        var hosted = tolerant.begin("world", "lease2", "owner", 30, 2);
+        response.set("{\"epoch\":5,\"generation\":3,\"server_now\":100,\"expires\":130}");
+        check(tolerant.acquire(hosted));
+        check(tolerantGate.snapshotVerified(hosted.attempt(), 3, 0, 0) && tolerantGate.beginHosting(hosted.attempt(), 0, 0));
+        check(tolerantGate.leaseUsableFor(hosted.attempt(), 20, 0, 0) && !tolerantGate.leaseUsableFor(hosted.attempt(), 27, 0, 0));
+        response.set(null);
+        try { tolerant.renewTolerant(hosted); throw new AssertionError(); } catch (IOException expected) { }
+        check(tolerantGate.phase() == LocalHostGate.Phase.HOSTING && tolerantGate.mayContinueHosting(hosted.attempt(), 0, 0));
+        status.set(503); response.set("{}");
+        try { tolerant.renewTolerant(hosted); throw new AssertionError(); } catch (IOException expected) { }
+        check(tolerantGate.phase() == LocalHostGate.Phase.HOSTING);
+        status.set(200); response.set("{\"epoch\":5,\"generation\":3,\"server_now\":100,\"expires\":130}");
+        check(tolerant.renewTolerant(hosted));
+        status.set(409); response.set("{\"error\":\"lease conflict\"}");
+        try { tolerant.renewTolerant(hosted); throw new AssertionError(); } catch (LeaseAuthorityClient.LeaseRejected expected) { }
+        check(tolerantGate.phase() == LocalHostGate.Phase.STOP_REQUIRED);
+        var lapsed = ConservativeLeaseDeadline.fromGrant(0, 0, 100, 130, 2);
+        check(lapsed.usableFor(1_000_000_000L, 1_000, 20) && !lapsed.usableFor(8_000_000_000L, 8_000, 20) && lapsed.isUsable(1, 1));
+
         var newer = new LocalHostGate();
         var a = newer.beginAcquire();
         var deadline = ConservativeLeaseDeadline.fromGrant(0, 0, 100, 130, 2);

@@ -15,17 +15,34 @@ public final class RelayPublisher implements E4mcRelayBridge.Listener {
     private final Executor serialExecutor;
     private final Runnable ready;
     private final Consumer<Throwable> failure;
+    private final java.util.concurrent.ScheduledExecutorService timer;
+    private final long reconnectSeconds;
     private volatile Object current;
     private long revision = -1;
     private Object published;
+    /** Counts addresses published; a reconnect wait succeeds only if it advances. Confined to the serial executor. */
+    private long publications;
     public boolean sessionOpen() { return current != null; }
 
+    /** A relay drop while hosting stops the host immediately. */
     public RelayPublisher(LeaseAuthorityClient authority, LeaseCoordinator.Acquisition acquisition, LocalHostGate gate,
                           Executor serialExecutor, Runnable ready, Consumer<Throwable> failure) {
-        if (authority == null || acquisition == null || gate == null || serialExecutor == null || ready == null || failure == null)
+        this(authority, acquisition, gate, serialExecutor, ready, failure, null, 0);
+    }
+
+    /**
+     * A relay drop while hosting withdraws the address and waits up to {@code reconnectSeconds} for e4mc to
+     * open and publish a new session before stopping the host.
+     */
+    public RelayPublisher(LeaseAuthorityClient authority, LeaseCoordinator.Acquisition acquisition, LocalHostGate gate,
+                          Executor serialExecutor, Runnable ready, Consumer<Throwable> failure,
+                          java.util.concurrent.ScheduledExecutorService timer, long reconnectSeconds) {
+        if (authority == null || acquisition == null || gate == null || serialExecutor == null || ready == null || failure == null
+                || reconnectSeconds < 0 || (timer == null) != (reconnectSeconds == 0))
             throw new IllegalArgumentException("Missing relay publisher input");
         this.authority = authority; this.acquisition = acquisition; this.gate = gate;
         this.serialExecutor = serialExecutor; this.ready = ready; this.failure = failure;
+        this.timer = timer; this.reconnectSeconds = reconnectSeconds;
     }
 
     @Override public void opened(Object token) {
@@ -51,6 +68,7 @@ public final class RelayPublisher implements E4mcRelayBridge.Listener {
                 var state = authority.updateEndpoint(acquisition.world(), acquisition.lease(), acquisition.epoch(), revision, address, 2);
                 revision = state.revision();
                 published = token;
+                publications++;
                 if (current != token || gate.phase() != LocalHostGate.Phase.HOSTING) revoke(token);
                 else ready.run();
             } catch (Exception error) { failed(error); }
@@ -63,7 +81,16 @@ public final class RelayPublisher implements E4mcRelayBridge.Listener {
         serialExecutor.execute(() -> {
             try { revoke(token); }
             catch (Exception error) { failed(error); return; }
-            if (wasCurrent && gate.phase() == LocalHostGate.Phase.HOSTING) failed(new IOException("Relay disconnected"));
+            if (!wasCurrent || gate.phase() != LocalHostGate.Phase.HOSTING) return;
+            if (timer == null) { failed(new IOException("Relay disconnected")); return; }
+            long before = publications;
+            com.mojang.logging.LogUtils.getLogger().warn("HostHop relay disconnected; waiting up to {} s for a new relay session", reconnectSeconds);
+            try {
+                timer.schedule(() -> serialExecutor.execute(() -> {
+                    if (publications == before && gate.phase() == LocalHostGate.Phase.HOSTING)
+                        failed(new IOException("Relay did not reconnect"));
+                }), reconnectSeconds, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException shuttingDown) { failed(new IOException("Relay disconnected")); }
         });
     }
 

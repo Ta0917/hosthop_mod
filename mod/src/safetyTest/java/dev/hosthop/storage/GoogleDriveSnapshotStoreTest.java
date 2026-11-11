@@ -61,6 +61,34 @@ public final class GoogleDriveSnapshotStoreTest {
                 return reply(200, Map.of(), metadata);
             });
             check(resume.upload(archive, "folder", "test-token").equals(uploaded) && resumeCalls.get() == 6);
+            // An access token that expires mid-upload is refreshed; the chunk is resumed with the new token.
+            var refreshCalls = new AtomicInteger();
+            var tokenNow = new java.util.concurrent.atomic.AtomicReference<>("old-token");
+            var refreshing = new GoogleDriveSnapshotStore(request -> {
+                int step = refreshCalls.getAndIncrement();
+                String auth = request.headers().firstValue("Authorization").orElseThrow();
+                if (step == 0) return reply(200, Map.of(), "{\"storageQuota\":{}}");
+                if (step == 1) return reply(200, Map.of("Location", List.of("https://www.googleapis.com/upload/drive/v3/files?upload_id=test")), "");
+                if (step == 2) { check(auth.equals("Bearer old-token")); tokenNow.set("new-token"); return reply(401, Map.of(), ""); }
+                check(auth.equals("Bearer new-token"));
+                if (step == 3) {
+                    check(request.headers().firstValue("Content-Range").orElseThrow().equals("bytes */" + size));
+                    return reply(308, Map.of(), "");
+                }
+                if (step == 4) return reply(308, Map.of("Range", List.of("bytes=0-8388607")), "");
+                check(step == 5);
+                return reply(200, Map.of(), metadata);
+            });
+            refreshing.setTokenSource(tokenNow::get);
+            check(refreshing.upload(archive, "folder", "old-token").equals(uploaded) && refreshCalls.get() == 6);
+            var expired = new GoogleDriveSnapshotStore(request -> {
+                String range = request.headers().firstValue("Content-Range").orElse("");
+                if (range.startsWith("bytes 0-")) return reply(401, Map.of(), "");
+                return request.uri().toString().contains("about") ? reply(200, Map.of(), "{\"storageQuota\":{}}")
+                        : reply(200, Map.of("Location", List.of("https://www.googleapis.com/upload/drive/v3/files?upload_id=test")), "");
+            });
+            try { expired.upload(archive, "folder", "test-token"); throw new AssertionError("expired token without a source accepted"); }
+            catch (IOException expectedFailure) { }
             var invalidPositionCalls = new AtomicInteger();
             var invalidPosition = new GoogleDriveSnapshotStore(request -> {
                 int step = invalidPositionCalls.getAndIncrement();

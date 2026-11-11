@@ -34,6 +34,15 @@ public final class SharedWorldTransfer {
     private Path baseArchive;
     private GoogleDriveSnapshotStore.ObjectRef checkpointBaseRef;
     private Path checkpointBaseArchive;
+    private volatile dev.hosthop.storage.DriveTokenSource tokenSource;
+
+    /** Uploads can outlast the caller's access token; later Drive and authority calls then use a refreshed one. */
+    public void setTokenSource(dev.hosthop.storage.DriveTokenSource source) { tokenSource = source; }
+
+    private String fresh(String token) throws IOException, InterruptedException {
+        var source = tokenSource;
+        return source == null ? token : source.accessToken();
+    }
 
     public SharedWorldTransfer(LocalHostGate gate, LeaseAuthorityClient authority, SnapshotStore storage,
                                LongSupplier nanos, LongSupplier millis) {
@@ -89,6 +98,7 @@ public final class SharedWorldTransfer {
             } finally { if (verifiedCreated) Files.deleteIfExists(verified); }
         }
         var object = storage.upload(upload, folder, token);
+        token = fresh(token);
         if (!upload.equals(archive) && !storage.canUseBase(checkpointBase, folder, token)) throw new IOException("Checkpoint base unavailable");
         if (!gate.mayContinueHosting(acquisition.attempt(), nanos.getAsLong(), millis.getAsLong())) throw new IOException("Host lease expired during checkpoint");
         var operation = new CheckpointRecord(acquisition.world(), java.util.UUID.randomUUID().toString(), acquisition.principal(),
@@ -201,6 +211,7 @@ public final class SharedWorldTransfer {
             com.mojang.logging.LogUtils.getLogger().warn("HostHop snapshot upload failed ({})", failure.getClass().getSimpleName());
             throw failure;
         }
+        driveToken = fresh(driveToken);
         if (!upload.equals(archive) && !storage.canUseBase(baseRef, folderId, driveToken))
             throw new IOException("Delta base is unavailable before commit");
         if (!gate.finalSnapshotVerified(acquisition.attempt(), acquisition.generation(), nanos.getAsLong(), millis.getAsLong()))
@@ -274,6 +285,7 @@ public final class SharedWorldTransfer {
                     if (folderId == null || !storage.canUseBase(base, folderId, driveToken)) throw new IOException("Delta base is unavailable during recovery");
                 } else SnapshotVerifier.verify(downloaded);
             } finally { if (downloadedHere) Files.deleteIfExists(downloaded); }
+            driveToken = fresh(driveToken);
             try { receipt = authority.commit(operation, driveToken); }
             catch (IOException failure) {
                 if (!verifiedStopped) throw failure;
@@ -300,7 +312,7 @@ public final class SharedWorldTransfer {
         var operation = new PublicationRecord(world, java.util.UUID.randomUUID().toString(), principal, stopped.lease(),
                 stopped.epoch(), stopped.generation(), object.sha256(), object.fileId(), object.size(), stopped.generation() + 1);
         PendingPublicationJournal.create(journal, operation);
-        authority.recoverStopped(operation, driveToken);
+        authority.recoverStopped(operation, fresh(driveToken));
         authority.release(operation);
     }
 }

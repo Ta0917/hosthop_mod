@@ -43,6 +43,12 @@ public final class ConservativeLeaseDeadline {
         return new ConservativeLeaseDeadline(requestNanos, requestMillis, safeSeconds);
     }
 
+    /** Whether the deadline still has at least this much time left; does not record the reading. */
+    public synchronized boolean usableFor(long nowNanos, long nowMillis, long seconds) {
+        if (expired || seconds < 0 || nowNanos < lastNanos || nowMillis < lastMillis) return false;
+        return deadlineNanos - nowNanos > seconds * NANOS_PER_SECOND && deadlineMillis - nowMillis > seconds * MILLIS_PER_SECOND;
+    }
+
     /** Once a deadline expires or either clock goes backwards, it stays invalid. */
     public synchronized boolean isUsable(long nowNanos, long nowMillis) {
         if (expired) return false;

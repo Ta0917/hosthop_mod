@@ -139,6 +139,21 @@ public final class LocalHostGate {
         return true;
     }
 
+    /**
+     * A renewal whose request failed in transit. The current deadline stays in force and is still
+     * enforced by every later check, so the host keeps running only while the existing lease is valid.
+     */
+    public synchronized boolean renewalDeferred(Attempt attempt, Renewal renewal) {
+        if (attempt == null || attempt != current || renewal == null || renewal != pendingRenewal || !mayRenewInPhase()) return false;
+        pendingRenewal = null;
+        return true;
+    }
+
+    /** Whether the current deadline leaves at least this many seconds; does not change state. */
+    public synchronized boolean leaseUsableFor(Attempt attempt, long seconds, long nowNanos, long nowMillis) {
+        return attempt != null && attempt == current && mayRenewInPhase() && deadline != null && deadline.usableFor(nowNanos, nowMillis, seconds);
+    }
+
     /** Must be called by the host loop before each protected action. */
     public synchronized boolean mayContinueHosting(Attempt attempt, long nowNanos, long nowMillis) {
         return attempt != null && attempt == current && phase == Phase.HOSTING && checkDeadline(nowNanos, nowMillis);

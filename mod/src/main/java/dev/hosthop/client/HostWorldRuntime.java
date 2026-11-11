@@ -18,6 +18,7 @@ import dev.hosthop.world.SaveFailureMonitor;
 import dev.hosthop.world.CheckpointSave;
 import dev.hosthop.world.PendingHostRecovery;
 import dev.hosthop.world.ServerStopSignal;
+import dev.hosthop.world.SessionCleanup;
 import dev.hosthop.world.SharedWorldTransfer;
 import dev.hosthop.world.HostPlayerIdentity;
 import java.io.IOException;
@@ -59,6 +60,12 @@ public final class HostWorldRuntime {
         LocalProcessBusy() { super("Another HostHop process is running"); }
     }
     private static final AtomicReference<HostWorldRuntime> ACTIVE = new AtomicReference<>();
+    /** Lease is 90 s; renew every 15 s, check every 5 s, and stop once less than 20 s would remain. */
+    private static final long RENEW_TICK = 5, RENEW_INTERVAL = 15, STOP_MARGIN = 20, RELAY_RECONNECT_SECONDS = 60;
+    /** The newest released sessions stay on disk as a download cache for the next host. */
+    private static final int KEEP_RELEASED_SESSIONS = 2;
+    private volatile long lastRenewed;
+    private volatile boolean renewalRetrying;
     private static volatile String lastStatus = "screen.hosthop.initial";
     private static volatile int uploadPercent = -1;
     private static volatile int downloadPercent = -1;
@@ -101,6 +108,10 @@ public final class HostWorldRuntime {
                     try { dev.hosthop.world.SaveStatus.writeProgress(net.neoforged.fml.loading.FMLPaths.CONFIGDIR.get().resolve("hosthop"), (int) percent); }
                     catch (IOException failure) { com.mojang.logging.LogUtils.getLogger().warn("HostHop could not persist upload progress"); }
                 }, percent -> downloadPercent = (int) percent);
+        // Uploads of large worlds can outlast one access token; refresh it as they go.
+        dev.hosthop.storage.DriveTokenSource tokens = () -> credentials.access().accessToken();
+        if (storage instanceof GoogleDriveSnapshotStore drive) drive.setTokenSource(tokens);
+        transfer.setTokenSource(tokens);
     }
 
     public static boolean start(Invitation invitation, DriveCredentialManager credentials, String initialName, Consumer<String> status) {
@@ -201,8 +212,7 @@ public final class HostWorldRuntime {
             var compatibility = dev.hosthop.config.CompatibilityManifest.capture(game);
             authority.publishCompatibility(invitation.world(), id, acquisition.epoch(), compatibility.json());
             stage = "restoring world";
-            var activeLease = acquisition;
-            renewer.scheduleWithFixedDelay(() -> renew(activeLease), 15, 15, TimeUnit.SECONDS);
+            scheduleRenewal(acquisition, false);
             if (cancelled.get() || !minecraft.isRunning()) { cancelled.set(true); abortBeforeStart(); return; }
             transfer.prepare(acquisition, initial, sessionDir.resolve("initial.zip"), worldPath, token.accessToken(), sessionDir.getParent());
             if (cancelled.get() || !minecraft.isRunning()) { cancelled.set(true); abortBeforeStart(); return; }
@@ -213,7 +223,7 @@ public final class HostWorldRuntime {
             monitor = new SaveFailureMonitor();
             relay = new RelayPublisher(authority, acquisition, gate, relayWorker, () -> {
                 relayReady = true; tell("screen.hosthop.host_ready");
-            }, error -> fail("screen.hosthop.host_failed"));
+            }, error -> fail("screen.hosthop.host_failed"), renewer, RELAY_RECONNECT_SECONDS);
             E4mcRelayBridge.install(relay);
             minecraft.execute(() -> {
                 if (cancelled.get()) { worker.execute(this::abortBeforeStart); return; }
@@ -269,6 +279,7 @@ public final class HostWorldRuntime {
             Files.delete(pendingPath);
             Files.delete(candidate.journal());
         }
+        SessionCleanup.markReleased(candidate.journal().getParent());
         return true;
     }
 
@@ -300,10 +311,10 @@ public final class HostWorldRuntime {
             transfer.publishExpiredStopped(stopped, invitation.world(), invitation.principal(), invitation.folder(), driveToken);
             Files.delete(pendingPath);
             Files.delete(journal);
+            SessionCleanup.markReleased(stopped.session());
             return true;
         }
-        var activeRecovery = recovered;
-        var renewal = renewer.scheduleWithFixedDelay(() -> renew(activeRecovery), 15, 15, TimeUnit.SECONDS);
+        var renewal = scheduleRenewal(recovered, true);
         try {
             Path archive = stopped.session().resolve("retry-" + UUID.randomUUID() + ".zip");
             transfer.publishAfterStopped(recovered, stopped.world(), archive, journal, UUID.randomUUID().toString(),
@@ -311,6 +322,7 @@ public final class HostWorldRuntime {
             Files.delete(pendingPath);
             Files.delete(journal);
         } finally { renewal.cancel(false); }
+        SessionCleanup.markReleased(stopped.session());
         return true;
     }
 
@@ -324,25 +336,67 @@ public final class HostWorldRuntime {
         return values;
     }
 
+    /**
+     * Runs every RENEW_TICK seconds. A healthy lease is renewed every RENEW_INTERVAL seconds; after a
+     * transport failure it is retried on every tick for as long as the current lease leaves STOP_MARGIN
+     * seconds, so one network blip no longer ends the session.
+     */
     private void renew(LeaseCoordinator.Acquisition target) {
         try {
             if (target == null || acquisition != target) return;
-            boolean renewed = coordinator.renew(target);
+            long now = System.nanoTime();
+            if (!renewalRetrying && now - lastRenewed < TimeUnit.SECONDS.toNanos(RENEW_INTERVAL)) return;
+            boolean renewed = coordinator.renewTolerant(target);
             if (acquisition != target) return;
-            if (!renewed
-                    && gate.phase() != LocalHostGate.Phase.IDLE && gate.phase() != LocalHostGate.Phase.RELEASE_REQUIRED
-                    && gate.phase() != LocalHostGate.Phase.ABORTING) fail("screen.hosthop.lease_failed");
-        } catch (Exception failure) { if (acquisition == target) fail("screen.hosthop.lease_failed"); }
+            if (renewed) {
+                if (renewalRetrying) com.mojang.logging.LogUtils.getLogger().info("HostHop lease renewal recovered");
+                renewalRetrying = false;
+                lastRenewed = now;
+                return;
+            }
+            if (renewablePhase()) fail("screen.hosthop.lease_failed");
+        } catch (LeaseAuthorityClient.LeaseRejected | InterruptedException | RuntimeException failure) {
+            if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
+            if (acquisition == target) fail("screen.hosthop.lease_failed");
+        } catch (IOException transportFailure) {
+            if (acquisition != target) return;
+            renewalRetrying = true;
+            if (gate.leaseUsableFor(target.attempt(), STOP_MARGIN, System.nanoTime(), System.currentTimeMillis()))
+                com.mojang.logging.LogUtils.getLogger().warn("HostHop lease renewal failed ({}); retrying while the lease is still valid",
+                        transportFailure.getClass().getSimpleName());
+            else if (renewablePhase()) fail("screen.hosthop.lease_failed");
+        }
+    }
+    private boolean renewablePhase() {
+        var phase = gate.phase();
+        return phase != LocalHostGate.Phase.IDLE && phase != LocalHostGate.Phase.RELEASE_REQUIRED && phase != LocalHostGate.Phase.ABORTING;
+    }
+    /** renewNow renews on the first tick, for a recovered grant whose remaining time is unknown. */
+    private java.util.concurrent.ScheduledFuture<?> scheduleRenewal(LeaseCoordinator.Acquisition target, boolean renewNow) {
+        renewalRetrying = renewNow;
+        lastRenewed = System.nanoTime();
+        return renewer.scheduleWithFixedDelay(() -> renew(target), RENEW_TICK, RENEW_TICK, TimeUnit.SECONDS);
     }
 
     private void abortBeforeStart() {
         try {
             if (acquisition != null && acquisition.epoch() > 0 && coordinator.abortBeforeHosting(acquisition)) {
                 Files.deleteIfExists(pendingPath);
+                SessionCleanup.markReleased(sessionDir);
                 tell(cancelled.get() ? "screen.hosthop.cancelled" : "screen.hosthop.host_failed");
             } else tell("screen.hosthop.recovery_required");
         } catch (Exception failure) { tell("screen.hosthop.recovery_required"); }
         cleanup();
+    }
+
+    /** Disk cleanup must never turn a successful save into a failure. */
+    private void removeOldSessions() {
+        try {
+            int removed = SessionCleanup.removeReleased(minecraft.gameDirectory.toPath(), KEEP_RELEASED_SESSIONS);
+            if (removed > 0) com.mojang.logging.LogUtils.getLogger().info("HostHop removed {} old local session folders", removed);
+        } catch (IOException | RuntimeException failure) {
+            com.mojang.logging.LogUtils.getLogger().warn("HostHop could not remove old local sessions ({})", failure.getClass().getSimpleName());
+        }
     }
 
     private void failBeforeServer(String message) { fail(message); cleanup(); }
@@ -415,7 +469,7 @@ public final class HostWorldRuntime {
                         && previous.getFileName().toString().matches("checkpoint-base-[0-9a-f-]{36}\\.zip"))
                     Files.deleteIfExists(previous);
             }
-            pruneCheckpoints(lease, token);
+            pruneCheckpoints(lease, credentials.access().accessToken());
             return true;
         } finally {
             try { removeCheckpointWorkspace(dir); }
@@ -553,8 +607,23 @@ public final class HostWorldRuntime {
                 if (relay.sessionOpen()) throw new IOException("Relay did not close");
                 // A lost lease must block publication, but a verified stopped world
                 // is still useful recovery evidence if the same lease remains valid.
-                new WindowsSecretStore(pendingPath).save(pendingData("stopped", acquisition.lease(), worldPath.getFileName().toString()));
-                if (failed.get() || gate.phase() != LocalHostGate.Phase.QUIESCING) throw new IOException("Lease cannot publish");
+                var evidence = pendingData("stopped", acquisition.lease(), worldPath.getFileName().toString());
+                new WindowsSecretStore(pendingPath).save(evidence);
+                if (failed.get() || gate.phase() != LocalHostGate.Phase.QUIESCING) {
+                    // This attempt may no longer publish (for example after a relay or lease failure), but the
+                    // world stopped cleanly and was recorded as such. Run the same recovery a restart would:
+                    // it publishes under the lease if it is still active, or as an expired stopped host.
+                    shutdownStage = "stopped-host recovery";
+                    if (gate.phase() != LocalHostGate.Phase.STOP_REQUIRED || !gate.confirmStopped(acquisition.attempt()))
+                        throw new IOException("Lease cannot publish");
+                    tell("screen.hosthop.saving_world");
+                    if (!recoverStoppedHost(evidence, credentials.access().accessToken())) throw new IOException("Stopped host could not be recovered");
+                    Files.deleteIfExists(pendingPath);
+                    SessionCleanup.markReleased(sessionDir);
+                    tell("screen.hosthop.saved_world");
+                    removeOldSessions();
+                    return;
+                }
                 tell("screen.hosthop.saving_world");
                 shutdownStage = "Drive authorization";
                 String token = credentials.access().accessToken();
@@ -572,7 +641,9 @@ public final class HostWorldRuntime {
                 }
                 Files.deleteIfExists(pendingPath);
                 Files.deleteIfExists(journal);
+                SessionCleanup.markReleased(sessionDir);
                 tell("screen.hosthop.saved_world");
+                removeOldSessions();
             } catch (Exception failure) {
                 com.mojang.logging.LogUtils.getLogger().warn("HostHop shutdown failed during {} ({})", shutdownStage, failure.getClass().getSimpleName());
                 tell(failure instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace ? "screen.hosthop.disk_recovery"
