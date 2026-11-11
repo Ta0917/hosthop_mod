@@ -45,7 +45,7 @@ public final class HostHopReconnectScreen extends Screen {
                 var remote = reconnect.authority.compatibility(reconnect.invitation.world(), endpoint.epoch());
                 var local = dev.hosthop.config.CompatibilityManifest.capture(Minecraft.getInstance().gameDirectory.toPath());
                 var diff = remote.compare(local);
-                return new Checked(endpoint, !diff.mods().isEmpty() || !diff.configs().isEmpty());
+                return new Checked(endpoint, !reconnect.acceptedMods.containsAll(diff.mods()) || !reconnect.acceptedConfigs.containsAll(diff.configs()));
             } catch (Exception failure) { return new Checked(null, false); }
         }).thenAccept(checked -> Minecraft.getInstance().execute(() -> {
             checking = false;

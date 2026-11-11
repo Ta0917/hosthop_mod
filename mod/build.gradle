@@ -414,6 +414,12 @@ tasks.register('sessionCleanupCheck', JavaExec) {
     mainClass = 'dev.hosthop.world.SessionCleanupTest'
 }
 tasks.named('check') { dependsOn tasks.named('sessionCleanupCheck') }
+tasks.register('requiredModsCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath
+    mainClass = 'dev.hosthop.world.RequiredModsTest'
+}
+tasks.named('check') { dependsOn tasks.named('requiredModsCheck') }
 tasks.register('saveKeepAliveCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath

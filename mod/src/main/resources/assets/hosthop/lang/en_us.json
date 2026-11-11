@@ -1,9 +1,5 @@
 {
   "screen.hosthop.title": "Shared World",
-  "screen.hosthop.compatibility_mod_mismatch": "Mod configuration differs",
-  "screen.hosthop.compatibility_mod_detail": "Cannot connect because mods differ: %s",
-  "screen.hosthop.compatibility_config_title": "Configuration differs",
-  "screen.hosthop.compatibility_config_warning": "Config files differ: %s. Adjust manually if needed. Join anyway?",
   "screen.hosthop.compatibility_config_cancelled": "Check the configuration before joining again",
   "screen.hosthop.compatibility_recheck": "Configuration changed; automatic reconnect stopped. Recheck from the shared world screen",
   "screen.hosthop.maintenance": "Maintenance",
@@ -116,5 +112,20 @@
   "screen.hosthop.upload_confirming": "Upload complete; confirming save. Saving continues after closing the window",
   "screen.hosthop.saved_world": "Shared world saved successfully",
   "screen.hosthop.saving_title": "Saving the shared world",
-  "screen.hosthop.saving_wait": "Please wait. Closing the window will quit automatically once saving is done"
+  "screen.hosthop.saving_wait": "Please wait. Closing the window will quit automatically once saving is done",
+  "screen.hosthop.compat_title": "Differences from the host",
+  "screen.hosthop.compat_intro": "Your mods differ from the host's. Client-only mods are fine, but differing mods that affect the world can cause problems.",
+  "screen.hosthop.compat_intro_configs": "Your config files differ from the host's. Adjust them manually if needed.",
+  "screen.hosthop.compat_mod": "Mod %s: host %s / you %s",
+  "screen.hosthop.compat_mod_file": "Mod %s: same version %s but a different file",
+  "screen.hosthop.compat_missing": "none",
+  "screen.hosthop.compat_config": "Config %s",
+  "screen.hosthop.compat_hint": "Ticked items will not be warned about again on this PC",
+  "screen.hosthop.compat_page": "%s / %s",
+  "screen.hosthop.compat_join": "Join anyway",
+  "screen.hosthop.compat_host_changed": "The host changed while you were reviewing. Please join again",
+  "screen.hosthop.required_mods_missing": "You cannot host because this world needs mods you lack (the world was not changed): %s",
+  "screen.hosthop.required_mod_absent": "%s (%s or later required; not installed)",
+  "screen.hosthop.required_mod_older": "%s (%s or later required; you have %s)",
+  "screen.hosthop.required_mod_more": " and %s more"
 }

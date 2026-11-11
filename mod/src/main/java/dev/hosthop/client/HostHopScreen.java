@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.client.Minecraft;
@@ -292,34 +293,57 @@ public final class HostHopScreen extends Screen {
                     }
                     var endpoint = host.endpoint();
                     if (endpoint == null) { busy(false, "screen.hosthop.host_waiting"); return; }
-                    if (differences != null && !differences.mods().isEmpty()) {
-                        busy(false, "screen.hosthop.compatibility_mod_mismatch");
-                        status = Component.translatable("screen.hosthop.compatibility_mod_detail", String.join(", ", differences.mods().stream().limit(4).toList()));
+                    if (differences != null && !differences.isEmpty()) {
+                        // A warning only: client-only mods need not match, and they cannot be told apart reliably.
+                        minecraft.gui.setScreen(new HostHopCompatibilityScreen(this, differences,
+                                (mods, configs) -> connectAfterReview(endpoint, invitation, authority, differences, mods, configs),
+                                () -> busy(false, "screen.hosthop.compatibility_config_cancelled")));
                         return;
                     }
-                    if (differences != null && !differences.configs().isEmpty()) {
-                        minecraft.gui.setScreen(new ConfirmScreen(accepted -> {
-                            minecraft.gui.setScreen(this);
-                            if (accepted) connect(endpoint, invitation, authority);
-                            else busy(false, "screen.hosthop.compatibility_config_cancelled");
-                        }, Component.translatable("screen.hosthop.compatibility_config_title"),
-                                Component.translatable("screen.hosthop.compatibility_config_warning", String.join(", ", differences.configs().stream().limit(5).toList()))));
-                        return;
-                    }
-                    connect(endpoint, invitation, authority);
+                    connect(endpoint, invitation, authority, Set.of(), Set.of());
                 });
             } catch (Exception failure) { finish(id, "screen.hosthop.join_failed"); }
         });
     }
 
-    private void connect(LeaseAuthorityClient.Endpoint endpoint, Invitation invitation, LeaseAuthorityClient authority) {
+    /**
+     * The player may read the warning for longer than the endpoint stays valid, so fetch it again. A different
+     * host may run different mods, which the player has not seen; then ask them to join again.
+     */
+    private void connectAfterReview(LeaseAuthorityClient.Endpoint reviewed, Invitation invitation, LeaseAuthorityClient authority,
+                                    dev.hosthop.config.CompatibilityManifest.Differences accepted, Set<String> ignoredMods, Set<String> ignoredConfigs) {
+        long id = request.incrementAndGet();
+        busy(true, "screen.hosthop.connecting");
+        CompletableFuture.runAsync(() -> {
+            try {
+                try {
+                    Path game = Minecraft.getInstance().gameDirectory.toPath();
+                    dev.hosthop.config.CompatibilityManifest.ignoreMods(game, ignoredMods);
+                    dev.hosthop.config.CompatibilityManifest.ignoreConfigs(game, ignoredConfigs);
+                } catch (IOException | RuntimeException failure) {
+                    com.mojang.logging.LogUtils.getLogger().warn("HostHop could not save the ignore lists ({})", failure.getClass().getSimpleName());
+                }
+                var endpoint = authority.hostStatus(invitation.world(), 2).endpoint();
+                Minecraft.getInstance().execute(() -> {
+                    if (id != request.get() || Minecraft.getInstance().gui.screen() != this) return;
+                    if (endpoint == null) busy(false, "screen.hosthop.host_waiting");
+                    else if (endpoint.epoch() != reviewed.epoch()) busy(false, "screen.hosthop.compat_host_changed");
+                    else connect(endpoint, invitation, authority, Set.copyOf(accepted.mods()), Set.copyOf(accepted.configs()));
+                });
+            } catch (Exception failure) { finish(id, "screen.hosthop.join_failed"); }
+        });
+    }
+
+    /** acceptedMods/acceptedConfigs are differences the player already chose to join with; reconnects stop only on new ones. */
+    private void connect(LeaseAuthorityClient.Endpoint endpoint, Invitation invitation, LeaseAuthorityClient authority,
+                         Set<String> acceptedMods, Set<String> acceptedConfigs) {
                     var minecraft = Minecraft.getInstance();
                     if (!endpoint.deadline().isUsable(System.nanoTime(), System.currentTimeMillis())) {
                         busy(false, "screen.hosthop.join_failed");
                         return;
                     }
                     var server = new ServerData("HostHop " + invitation.world(), endpoint.address(), ServerData.Type.OTHER);
-                    GuestReconnect.track(invitation, authority, endpoint, this);
+                    GuestReconnect.track(invitation, authority, endpoint, this, acceptedMods, acceptedConfigs);
                     ConnectScreen.startConnecting(this, minecraft, ServerAddress.parseString(endpoint.address()), server, false, null);
     }
 
@@ -358,7 +382,24 @@ public final class HostHopScreen extends Screen {
         });
     }
     void compatibilityChanged() { busy(false, "screen.hosthop.compatibility_recheck"); }
-    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; exportRecovery.active = !value; recoverUnclean.active = !value; maintenance.active = !value; initialWorld.active = !value; status = Component.translatable(message); }
+    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; exportRecovery.active = !value; recoverUnclean.active = !value; maintenance.active = !value; initialWorld.active = !value;
+        status = message.equals("screen.hosthop.required_mods_missing")
+                ? Component.translatable(message, requiredModList(HostWorldRuntime.requiredProblems())) : Component.translatable(message); }
+
+    /** For example "create (6.0 or later required; not installed), jei (19.1 or later required; you have 19.0)". */
+    private static Component requiredModList(java.util.List<dev.hosthop.world.RequiredMods.Problem> problems) {
+        var text = Component.empty();
+        int shown = Math.min(4, problems.size());
+        for (int i = 0; i < shown; i++) {
+            var problem = problems.get(i);
+            if (i > 0) text.append(", ");
+            text.append(problem.installed() == null
+                    ? Component.translatable("screen.hosthop.required_mod_absent", problem.id(), problem.required())
+                    : Component.translatable("screen.hosthop.required_mod_older", problem.id(), problem.required(), problem.installed()));
+        }
+        if (problems.size() > shown) text.append(Component.translatable("screen.hosthop.required_mod_more", problems.size() - shown));
+        return text;
+    }
 
     @Override public void onClose() {
         request.incrementAndGet();

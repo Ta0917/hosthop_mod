@@ -1,9 +1,5 @@
 {
   "screen.hosthop.title": "共有ワールド",
-  "screen.hosthop.compatibility_mod_mismatch": "MOD構成が一致しません",
-  "screen.hosthop.compatibility_mod_detail": "MOD構成が違うため接続できません: %s",
-  "screen.hosthop.compatibility_config_title": "設定ファイルの違い",
-  "screen.hosthop.compatibility_config_warning": "ホストと異なる設定: %s。必要なら手動で変更してください。そのまま参加しますか？",
   "screen.hosthop.compatibility_config_cancelled": "設定を確認してから再度参加してください",
   "screen.hosthop.compatibility_recheck": "構成が変わったため、自動再接続を停止しました。共有ワールド画面から再確認してください",
   "screen.hosthop.maintenance": "メンテナンス",
@@ -116,5 +112,20 @@
   "screen.hosthop.upload_confirming": "アップロード完了、保存を確定中です。画面を閉じても保存を続けます",
   "screen.hosthop.saved_world": "共有ワールドを保存しました",
   "screen.hosthop.saving_title": "共有ワールドを保存しています",
-  "screen.hosthop.saving_wait": "完了するまでこのままお待ちください。ウィンドウを閉じても保存後に自動で終了します"
+  "screen.hosthop.saving_wait": "完了するまでこのままお待ちください。ウィンドウを閉じても保存後に自動で終了します",
+  "screen.hosthop.compat_title": "ホストとの構成の違い",
+  "screen.hosthop.compat_intro": "ホストとMODが異なります。クライアント専用MODなら問題ありませんが、ワールドに関わるMODが違うと不具合が起きることがあります。",
+  "screen.hosthop.compat_intro_configs": "ホストと設定ファイルが異なります。必要なら手動で合わせてください。",
+  "screen.hosthop.compat_mod": "MOD %s: ホスト %s / あなた %s",
+  "screen.hosthop.compat_mod_file": "MOD %s: 同じバージョン %s でもファイルが異なる",
+  "screen.hosthop.compat_missing": "なし",
+  "screen.hosthop.compat_config": "設定 %s",
+  "screen.hosthop.compat_hint": "チェックした項目は、今後このPCでは警告しません",
+  "screen.hosthop.compat_page": "%s / %s",
+  "screen.hosthop.compat_join": "このまま参加する",
+  "screen.hosthop.compat_host_changed": "確認中にホストが交代しました。もう一度参加してください",
+  "screen.hosthop.required_mods_missing": "このワールドに必要なMODが不足しているため、ホストになれません（ワールドは変更していません）: %s",
+  "screen.hosthop.required_mod_absent": "%s（%s 以上が必要・未導入）",
+  "screen.hosthop.required_mod_older": "%s（%s 以上が必要・現在 %s）",
+  "screen.hosthop.required_mod_more": " ほか %s 件"
 }

@@ -33,14 +33,19 @@ public final class GuestReconnect {
     private Connection connection;
     private boolean loggedOut, reconnecting;
     private long waitStarted;
+    /** Differences the player already saw and joined with; a reconnect stops only on new ones. */
+    final java.util.Set<String> acceptedMods, acceptedConfigs;
 
-    private GuestReconnect(Invitation invitation, LeaseAuthorityClient authority, LeaseAuthorityClient.Endpoint endpoint, Screen parent) {
+    private GuestReconnect(Invitation invitation, LeaseAuthorityClient authority, LeaseAuthorityClient.Endpoint endpoint, Screen parent,
+                           java.util.Set<String> acceptedMods, java.util.Set<String> acceptedConfigs) {
         this.invitation = invitation; this.authority = authority; this.parent = parent;
+        this.acceptedMods = java.util.Set.copyOf(acceptedMods); this.acceptedConfigs = java.util.Set.copyOf(acceptedConfigs);
         address = endpoint.address(); epoch = endpoint.epoch();
     }
 
-    static void track(Invitation invitation, LeaseAuthorityClient authority, LeaseAuthorityClient.Endpoint endpoint, Screen parent) {
-        current = new GuestReconnect(invitation, authority, endpoint, parent);
+    static void track(Invitation invitation, LeaseAuthorityClient authority, LeaseAuthorityClient.Endpoint endpoint, Screen parent,
+                      java.util.Set<String> acceptedMods, java.util.Set<String> acceptedConfigs) {
+        current = new GuestReconnect(invitation, authority, endpoint, parent, acceptedMods, acceptedConfigs);
     }
     static boolean active(GuestReconnect value) { return value != null && current == value; }
     long waitStarted() { return waitStarted; }

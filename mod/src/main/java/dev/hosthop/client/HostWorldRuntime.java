@@ -146,6 +146,24 @@ public final class HostWorldRuntime {
     }
     public static boolean hostingReady() { var runtime = ACTIVE.get(); return runtime != null && runtime.relayReady && !runtime.failed.get(); }
     public static String lastStatus() { return lastStatus; }
+    private static volatile java.util.List<dev.hosthop.world.RequiredMods.Problem> requiredProblems = java.util.List.of();
+    /** The mods that stopped the last hosting attempt, for the status line. */
+    public static java.util.List<dev.hosthop.world.RequiredMods.Problem> requiredProblems() { return requiredProblems; }
+
+    /**
+     * Refuse to host a world whose recorded mods are missing here or older: opening it would drop their blocks,
+     * items and entities, and the loss would be published. This is not a question for the player.
+     */
+    private static void requireWorldMods(Path world) throws IOException {
+        var required = dev.hosthop.world.RequiredMods.read(world);
+        if (required == null) {
+            com.mojang.logging.LogUtils.getLogger().info("HostHop world has no required mod record yet; it is written when this session starts");
+            return;
+        }
+        var allowed = dev.hosthop.world.RequiredMods.allowedRemovals(net.neoforged.fml.loading.FMLPaths.CONFIGDIR.get().resolve("hosthop"));
+        var problems = dev.hosthop.world.RequiredMods.check(required, dev.hosthop.world.RequiredMods::installedVersion, allowed);
+        if (!problems.isEmpty()) throw new dev.hosthop.world.RequiredMods.Missing(problems);
+    }
     public static int uploadPercent() { return uploadPercent; }
     public static int downloadPercent() { return downloadPercent; }
     public static void cancelPreparing() { var runtime = ACTIVE.get(); if (runtime != null && !runtime.launchRequested) runtime.cancelled.set(true); }
@@ -218,6 +236,8 @@ public final class HostWorldRuntime {
             if (cancelled.get() || !minecraft.isRunning()) { cancelled.set(true); abortBeforeStart(); return; }
             transfer.prepare(acquisition, initial, sessionDir.resolve("initial.zip"), worldPath, token.accessToken(), sessionDir.getParent());
             if (cancelled.get() || !minecraft.isRunning()) { cancelled.set(true); abortBeforeStart(); return; }
+            stage = "checking required mods";
+            requireWorldMods(worldPath);
             stage = "preparing host player identity";
             HostPlayerIdentity.prepare(worldPath);
             pending.save(pendingData("starting", id, levelId));
@@ -243,7 +263,10 @@ public final class HostWorldRuntime {
                     root == null ? "none" : root.getClass().getSimpleName());
             if (acquisition != null && acquisition.epoch() > 0 && !launchRequested) {
                 abortBeforeStart();
-                if (error instanceof SharedWorldTransfer.BaseAccessRequired && lastStatus.equals("screen.hosthop.host_failed"))
+                if (error instanceof dev.hosthop.world.RequiredMods.Missing missing && lastStatus.equals("screen.hosthop.host_failed")) {
+                    requiredProblems = missing.problems();
+                    tell("screen.hosthop.required_mods_missing");
+                } else if (error instanceof SharedWorldTransfer.BaseAccessRequired && lastStatus.equals("screen.hosthop.host_failed"))
                     tell("screen.hosthop.base_access_required");
                 else if (error instanceof dev.hosthop.snapshot.DiskSpace.InsufficientSpace && lastStatus.equals("screen.hosthop.host_failed"))
                     tell("screen.hosthop.disk_insufficient");
@@ -415,6 +438,11 @@ public final class HostWorldRuntime {
                 || !candidate.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize().equals(worldPath.toAbsolutePath().normalize())) return;
         server = integrated;
         ServerStopSignal.watch(candidate);
+        // Record which mods the world now depends on, so the next host can be checked before opening it.
+        try { dev.hosthop.world.RequiredMods.write(worldPath, dev.hosthop.world.RequiredMods.collect(candidate.registryAccess())); }
+        catch (IOException | RuntimeException failure) {
+            com.mojang.logging.LogUtils.getLogger().warn("HostHop could not record the mods this world requires ({})", failure.getClass().getSimpleName());
+        }
         renewer.schedule(() -> { if (!relayReady && !failed.get()) fail("screen.hosthop.host_failed"); }, 60, TimeUnit.SECONDS);
         long interval = TimeUnit.MINUTES.toSeconds(5);
         boolean timerSmoke = !net.neoforged.fml.loading.FMLEnvironment.isProduction()
