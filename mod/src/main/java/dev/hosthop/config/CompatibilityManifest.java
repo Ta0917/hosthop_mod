@@ -35,8 +35,8 @@ public record CompatibilityManifest(Map<String,String> mods, Set<String> ignored
             String id = mod.getModId(), version = mod.getVersion().toString();
             if (!id.matches("[a-z0-9_]{1,64}") || version.length() > 128 || version.isBlank()) throw new IOException("Invalid mod metadata");
             Path file = mod.getOwningFile().getFile().getFilePath();
-            if (file != null && Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) version += "#" + hash(file);
-            if (mods.put(id, version) != null) throw new IOException("Duplicate mod ID");
+            String fileHash = file != null && Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) ? hash(file) : null;
+            if (mods.put(id, entry(id, version, fileHash)) != null) throw new IOException("Duplicate mod ID");
         }
         Map<String,String> configs = new TreeMap<>();
         if (Files.isDirectory(config, LinkOption.NOFOLLOW_LINKS)) {
@@ -52,6 +52,15 @@ public record CompatibilityManifest(Map<String,String> mods, Set<String> ignored
             }
         }
         return new CompatibilityManifest(Map.copyOf(mods), Set.copyOf(ignored), Map.copyOf(configs));
+    }
+    /**
+     * HostHop run from the development workspace is loaded from directories, so it has no file hash and its version
+     * carries a per-minute build stamp. Record a fixed value instead so two development clients still match each other,
+     * while a development client and a packaged jar still differ.
+     */
+    static String entry(String id, String version, String fileHash) {
+        if (fileHash != null) return version + "#" + fileHash;
+        return id.equals(dev.hosthop.HostHop.MOD_ID) ? "development" : version;
     }
     private static String hash(Path path) throws IOException {
         try (var input = Files.newInputStream(path)) {
