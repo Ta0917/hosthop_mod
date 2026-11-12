@@ -26,6 +26,7 @@ public final class SnapshotVerifierTest {
             System.out.println("Snapshot verified: " + result.files() + " files, " + result.uncompressedBytes() + " bytes");
             return;
         }
+        ParallelZipIdentityCheck.run();
         long reserve = 64L * 1024 * 1024;
         DiskSpace.check(reserve + 100, 100);
         try { DiskSpace.check(reserve + 99, 100); throw new AssertionError("Insufficient disk accepted"); }

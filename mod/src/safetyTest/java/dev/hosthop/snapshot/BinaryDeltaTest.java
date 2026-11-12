@@ -49,6 +49,31 @@ public final class BinaryDeltaTest {
         }
         try { BinaryDelta.apply(corrupt, base, root.resolve("bad-delta-output.zip")); throw new AssertionError("corrupt delta accepted"); }
         catch (IOException expected) { }
+        // The in-memory rebuild check must accept exactly what apply would rebuild and refuse everything else.
+        BinaryDelta.verifyRebuild(patch, base, updated, null);
+        BinaryDelta.verifyRebuild(changedDelta, base, changed, null);
+        try { BinaryDelta.verifyRebuild(patch, base, changed, null); throw new AssertionError("other archive accepted"); }
+        catch (IOException expected) { }
+        // A base byte the delta copies from (inside the unchanged region data) must break the check.
+        var usedBase = root.resolve("used-wrong.zip"); Files.copy(base, usedBase);
+        try (var channel = java.nio.channels.FileChannel.open(usedBase, java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE)) {
+            long pos = Files.size(usedBase) / 2; var one = java.nio.ByteBuffer.allocate(1); channel.read(one, pos);
+            channel.write(java.nio.ByteBuffer.wrap(new byte[]{(byte) (one.array()[0] ^ 1)}), pos);
+        }
+        try { BinaryDelta.verifyRebuild(patch, usedBase, updated, null); throw new AssertionError("wrong base accepted by check"); }
+        catch (IOException expected) { }
+        try { BinaryDelta.verifyRebuild(corrupt, base, updated, null); throw new AssertionError("corrupt delta accepted by check"); }
+        catch (IOException expected) { }
+        var sameSize = root.resolve("same-size.zip"); Files.copy(updated, sameSize);
+        try (var channel = java.nio.channels.FileChannel.open(sameSize, java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE)) {
+            long pos = Files.size(sameSize) / 2; var one = java.nio.ByteBuffer.allocate(1); channel.read(one, pos);
+            channel.write(java.nio.ByteBuffer.wrap(new byte[]{(byte) (one.array()[0] ^ 1)}), pos);
+        }
+        try { BinaryDelta.verifyRebuild(patch, base, sameSize, null); throw new AssertionError("changed archive accepted by check"); }
+        catch (IOException expected) { }
+        try { BinaryDelta.create(wrongBase, baseRef, updated, root.resolve("wrong-base.delta")); throw new AssertionError("wrong base used for delta"); }
+        catch (IOException expected) { }
+        if (Files.exists(root.resolve("wrong-base.delta"))) throw new AssertionError("delta left behind for a wrong base");
         System.out.println("Binary delta reconstruction checks passed");
     }
     private static String hash(java.nio.file.Path path) throws Exception {

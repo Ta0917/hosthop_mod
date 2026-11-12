@@ -42,35 +42,80 @@ public final class BinaryDelta {
 
     /** Build a delta without altering either source. Full snapshots must already be verified. */
     public static void create(Path base, ObjectRef baseRef, Path target, Path delta) throws IOException {
+        create(base, baseRef, target, delta, null);
+    }
+
+    /** As {@link #create(Path, ObjectRef, Path, Path)}, reporting 0..1 of the bytes read. */
+    public static void create(Path base, ObjectRef baseRef, Path target, Path delta, java.util.function.DoubleConsumer progress) throws IOException {
         validateRef(baseRef);
-        if (Files.size(base) != baseRef.size() || !hash(base).equals(baseRef.sha256())) throw new IOException("Base snapshot mismatch");
-        long targetSize = Files.size(target);
+        if (Files.size(base) != baseRef.size()) throw new IOException("Base snapshot mismatch");
+        var targetBefore = Files.readAttributes(target, java.nio.file.attribute.BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        long targetSize = targetBefore.size();
         if (targetSize <= 0 || targetSize > MAX_BYTES) throw new IOException("Invalid target size");
-        Map<String, Chunk> index = new HashMap<>();
-        int[] baseChunks = {0};
-        chunks(base, (bytes, length, offset) -> {
-            if (++baseChunks[0] > MAX_CHUNKS) throw new IOException("Too many base chunks");
-            index.putIfAbsent(chunkHash(bytes, length), new Chunk(offset, length));
+        // Each file is read once, hashing and cutting it into chunks in the same pass, and the two are read at
+        // the same time. Only the target's unmatched chunks are read again, to copy them into the delta.
+        var bytes = new ByteProgress(progress, baseRef.size() + targetSize);
+        var baseIndex = new java.util.concurrent.FutureTask<Map<String, Chunk>>(() -> {
+            Map<String, Chunk> index = new HashMap<>();
+            MessageDigest baseHash = digest();
+            int[] baseChunks = {0};
+            chunks(base, bytes, (data, length, offset) -> {
+                if (++baseChunks[0] > MAX_CHUNKS) throw new IOException("Too many base chunks");
+                baseHash.update(data, 0, length);
+                index.putIfAbsent(chunkHash(data, length), new Chunk(offset, length));
+            });
+            if (!HexFormat.of().formatHex(baseHash.digest()).equals(baseRef.sha256())) throw new IOException("Base snapshot mismatch");
+            return index;
         });
+        var baseThread = new Thread(baseIndex, "hosthop-delta-base");
+        baseThread.setDaemon(true);
+        baseThread.start();
+        record TargetChunk(String hash, int length, long offset) {}
+        var targetChunks = new ArrayList<TargetChunk>();
+        MessageDigest targetHash = digest();
+        Map<String, Chunk> index;
+        try {
+            chunks(target, bytes, (data, length, offset) -> {
+                if (targetChunks.size() >= MAX_CHUNKS) throw new IOException("Too many delta chunks");
+                targetHash.update(data, 0, length);
+                targetChunks.add(new TargetChunk(chunkHash(data, length), length, offset));
+            });
+            index = baseIndex.get();
+        } catch (InterruptedException interrupted) {
+            baseIndex.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new java.io.InterruptedIOException("Delta creation interrupted");
+        } catch (java.util.concurrent.ExecutionException failed) {
+            if (failed.getCause() instanceof IOException io) throw io;
+            throw new IOException("Delta base indexing failed", failed.getCause());
+        } catch (IOException failure) {
+            baseIndex.cancel(true);
+            throw failure;
+        }
+        byte[] targetDigest = targetHash.digest();
         Path literal = Files.createTempFile(delta.toAbsolutePath().getParent(), ".hosthop-literal-", ".tmp");
         var parts = new ArrayList<Part>();
-        long[] literalSize = {0};
-        MessageDigest targetHash = digest();
+        long literalSize = 0;
         try {
-            try (var out = Files.newOutputStream(literal, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
-                chunks(target, (bytes, length, offset) -> {
-                    if (parts.size() >= MAX_CHUNKS) throw new IOException("Too many delta chunks");
-                    targetHash.update(bytes, 0, length);
-                    Chunk found = index.get(chunkHash(bytes, length));
-                    if (found != null && found.length() == length) parts.add(new Part(true, length, found.offset()));
-                    else { parts.add(new Part(false, length, literalSize[0])); out.write(bytes, 0, length); literalSize[0] += length; }
-                });
+            try (var source = FileChannel.open(target, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
+                 var out = Files.newOutputStream(literal, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+                byte[] buffer = new byte[MAX];
+                for (var chunk : targetChunks) {
+                    Chunk found = index.get(chunk.hash());
+                    if (found != null && found.length() == chunk.length()) { parts.add(new Part(true, chunk.length(), found.offset())); continue; }
+                    readFully(source, buffer, chunk.length(), chunk.offset(), "Target changed during delta creation");
+                    out.write(buffer, 0, chunk.length());
+                    parts.add(new Part(false, chunk.length(), literalSize));
+                    literalSize += chunk.length();
+                }
             }
-            if (Files.size(target) != targetSize) throw new IOException("Target changed during delta creation");
-            byte[] targetDigest = targetHash.digest();
-            if (!HexFormat.of().formatHex(targetDigest).equals(hash(target))) throw new IOException("Target changed during delta creation");
+            // The copied chunks are read after hashing, so callers must still check the delta with verifyRebuild.
+            var targetAfter = Files.readAttributes(target, java.nio.file.attribute.BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (targetAfter.size() != targetSize || !targetAfter.lastModifiedTime().equals(targetBefore.lastModifiedTime())
+                    || !java.util.Objects.equals(targetAfter.fileKey(), targetBefore.fileKey()))
+                throw new IOException("Target changed during delta creation");
             try (var channel = FileChannel.open(delta, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
-                 var out = new DataOutputStream(java.nio.channels.Channels.newOutputStream(channel));
+                 var out = new DataOutputStream(new java.io.BufferedOutputStream(java.nio.channels.Channels.newOutputStream(channel), 1024 * 1024));
                  var in = Files.newInputStream(literal, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
                 out.write(MAGIC);
                 byte[] id = baseRef.fileId().getBytes(StandardCharsets.US_ASCII);
@@ -80,7 +125,64 @@ public final class BinaryDelta {
                 in.transferTo(out); out.flush(); channel.force(true);
             }
             inspect(delta);
+            bytes.finish();
         } finally { Files.deleteIfExists(literal); }
+    }
+
+    /**
+     * Checks, without writing anything, that the delta rebuilds exactly {@code target}: the bytes it rebuilds from
+     * {@code base} and the target's own bytes, hashed in parallel, must have the same SHA-256 and length. This checks
+     * the same thing as rebuilding the archive to disk and comparing it byte by byte, in a fraction of the time.
+     */
+    public static void verifyRebuild(Path delta, Path base, Path target, java.util.function.DoubleConsumer progress) throws IOException {
+        Parsed parsed = parse(delta);
+        long targetSize = Files.size(target);
+        if (Files.size(base) != parsed.info().base().size() || targetSize != parsed.info().targetSize())
+            throw new IOException("Delta verification mismatch");
+        var bytes = new ByteProgress(progress, 2 * targetSize);
+        var targetDigest = new java.util.concurrent.FutureTask<String>(() -> hash(target, bytes));
+        var thread = new Thread(targetDigest, "hosthop-delta-check");
+        thread.setDaemon(true);
+        thread.start();
+        String rebuilt;
+        try (var original = FileChannel.open(base, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
+             var patch = FileChannel.open(delta, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+            var digest = digest(); byte[] buffer = new byte[MAX]; long total = 0;
+            for (Part part : parsed.parts()) {
+                var source = part.fromBase() ? original : patch;
+                long position = part.fromBase() ? part.offset() : parsed.literalsAt() + part.offset();
+                readFully(source, buffer, part.length(), position, "Truncated delta input");
+                digest.update(buffer, 0, part.length());
+                bytes.add(part.length());
+                total += part.length();
+            }
+            if (total != targetSize) throw new IOException("Delta verification mismatch");
+            rebuilt = HexFormat.of().formatHex(digest.digest());
+        } catch (IOException failure) {
+            targetDigest.cancel(true);
+            throw failure;
+        }
+        String expected;
+        try { expected = targetDigest.get(); }
+        catch (InterruptedException interrupted) {
+            targetDigest.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new java.io.InterruptedIOException("Delta check interrupted");
+        } catch (java.util.concurrent.ExecutionException failed) {
+            if (failed.getCause() instanceof IOException io) throw io;
+            throw new IOException("Delta check failed", failed.getCause());
+        }
+        if (!rebuilt.equals(expected) || !rebuilt.equals(parsed.info().targetSha256())) throw new IOException("Delta verification mismatch");
+        bytes.finish();
+    }
+
+    private static void readFully(FileChannel source, byte[] buffer, int length, long position, String failure) throws IOException {
+        var view = ByteBuffer.wrap(buffer, 0, length);
+        while (view.hasRemaining()) {
+            int read = source.read(view, position);
+            if (read <= 0) throw new IOException(failure);
+            position += read;
+        }
     }
 
     public static Info inspect(Path delta) throws IOException { return parse(delta).info(); }
@@ -104,8 +206,15 @@ public final class BinaryDelta {
 
     /** Rebuild the exact original full ZIP, then verify both its SHA-256 and all world files. */
     public static void apply(Path delta, Path base, Path target) throws IOException {
+        apply(delta, base, target, null);
+    }
+
+    /** As {@link #apply(Path, Path, Path)}, reporting 0..1; the final archive check reports 1. */
+    public static void apply(Path delta, Path base, Path target, java.util.function.DoubleConsumer progress) throws IOException {
         Parsed parsed = parse(delta);
-        if (Files.size(base) != parsed.info().base().size() || !hash(base).equals(parsed.info().base().sha256()))
+        // Hashing the base and writing the target; verifying the rebuilt archive is the rest.
+        var done = new ByteProgress(ByteProgress.range(progress, 0, 0.7), Files.size(base) + parsed.info().targetSize());
+        if (Files.size(base) != parsed.info().base().size() || !hash(base, done).equals(parsed.info().base().sha256()))
             throw new IOException("Delta base mismatch");
         try (var original = FileChannel.open(base, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
              var patch = FileChannel.open(delta, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
@@ -124,6 +233,7 @@ public final class BinaryDelta {
                     var written = ByteBuffer.wrap(bytes, 0, read);
                     while (written.hasRemaining()) output.write(written);
                     position += read; remaining -= read;
+                    done.add(read);
                 }
             }
             output.force(true);
@@ -131,6 +241,7 @@ public final class BinaryDelta {
                 throw new IOException("Reconstructed snapshot mismatch");
         }
         SnapshotVerifier.verify(target);
+        if (progress != null) progress.accept(1.0);
     }
 
     private static Parsed parse(Path delta) throws IOException {
@@ -166,24 +277,24 @@ public final class BinaryDelta {
         } catch (RuntimeException invalid) { throw new IOException("Invalid delta", invalid); }
     }
 
-    private static void chunks(Path file, ChunkSink sink) throws IOException {
+    private static void chunks(Path file, ByteProgress progress, ChunkSink sink) throws IOException {
         try (var in = new BufferedInputStream(Files.newInputStream(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS))) {
             byte[] buffer = new byte[1024 * 1024], chunk = new byte[MAX]; int length = 0, read; long offset = 0, rolling = 0;
-            while ((read = in.read(buffer)) != -1) for (int i = 0; i < read; i++) {
+            while ((read = in.read(buffer)) != -1) { progress.add(read); for (int i = 0; i < read; i++) {
                 int b = buffer[i] & 255; chunk[length++] = buffer[i]; rolling = (rolling << 1) + GEAR[b];
                 if (length >= MIN && ((rolling & MASK) == 0 || length == MAX)) {
                     sink.accept(chunk, length, offset); offset += length; length = 0; rolling = 0;
                 }
-            }
+            } }
             if (length > 0) sink.accept(chunk, length, offset);
         }
     }
     private static String chunkHash(byte[] bytes, int length) throws IOException {
         var d = digest(); d.update(bytes, 0, length); return HexFormat.of().formatHex(d.digest());
     }
-    private static String hash(Path file) throws IOException {
+    private static String hash(Path file, ByteProgress progress) throws IOException {
         var d = digest(); try (var in = Files.newInputStream(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
-            byte[] b = new byte[1024 * 1024]; int n; while ((n = in.read(b)) != -1) d.update(b, 0, n);
+            byte[] b = new byte[1024 * 1024]; int n; while ((n = in.read(b)) != -1) { d.update(b, 0, n); progress.add(n); }
         } return HexFormat.of().formatHex(d.digest());
     }
     private static MessageDigest digest() throws IOException {

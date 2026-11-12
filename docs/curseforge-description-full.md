@@ -168,7 +168,7 @@ npx wrangler deploy --config service/wrangler.toml --secrets-file out/worker-sec
 # 注意と制限
 
 - 同時にホストになれるのは1人だけです。
-- 交代のたびに「最新データへのアクセスを許可」が必要になることがあります。
+- 「最新データへのアクセスを許可」は、基本的に最初の一回だけです。基準データが作り直されたときや、バックアップから復旧したあとは、もう一度必要になることがあります。
 - Windows のみ対応です。
 - 個人が趣味で作っている実験的なソフトウェアです。データの破損や巻き戻りが起こる可能性があります。
 - プライバシーポリシー: https://hosthop.iroprobox.com/privacy.html

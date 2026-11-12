@@ -61,6 +61,44 @@ public final class GoogleDriveSnapshotStoreTest {
                 return reply(200, Map.of(), metadata);
             });
             check(resume.upload(archive, "folder", "test-token").equals(uploaded) && resumeCalls.get() == 6);
+            // A delta slot keeps its ID: the content is replaced through PATCH and the name follows the new digest.
+            String slotMetadata = metadata.replace("\"file-id\"", "\"slot-id\"");
+            var slotCalls = new AtomicInteger();
+            var slotStore = new GoogleDriveSnapshotStore(request -> {
+                int step = slotCalls.getAndIncrement();
+                if (step == 0) {
+                    check(request.method().equals("GET") && request.uri().getPath().equals("/drive/v3/files/slot-id"));
+                    return reply(200, Map.of(), "{\"id\":\"slot-id\",\"parents\":[\"folder\"],\"trashed\":false,\"capabilities\":{\"canEdit\":true}}");
+                }
+                if (step == 1) return reply(200, Map.of(), "{\"storageQuota\":{}}");
+                if (step == 2) {
+                    check(request.method().equals("PATCH") && request.uri().getPath().equals("/upload/drive/v3/files/slot-id"));
+                    return reply(200, Map.of("Location", List.of("https://www.googleapis.com/upload/drive/v3/files/slot-id?upload_id=test")), "");
+                }
+                if (step == 3) return reply(308, Map.of("Range", List.of("bytes=0-8388607")), "");
+                check(step == 4);
+                return reply(200, Map.of(), slotMetadata);
+            });
+            var overwritten = slotStore.overwrite(archive, "slot-id", "folder", "test-token", ignored -> {});
+            check(overwritten.fileId().equals("slot-id") && overwritten.sha256().equals(hash) && slotCalls.get() == 5);
+            for (String unusable : new String[]{"", "{\"id\":\"slot-id\",\"parents\":[\"folder\"],\"trashed\":false,\"capabilities\":{\"canEdit\":false}}",
+                    "{\"id\":\"slot-id\",\"parents\":[\"other\"],\"trashed\":false,\"capabilities\":{\"canEdit\":true}}",
+                    "{\"id\":\"slot-id\",\"parents\":[\"folder\"],\"trashed\":true,\"capabilities\":{\"canEdit\":true}}"}) {
+                var refusing = new GoogleDriveSnapshotStore(request -> unusable.isEmpty() ? reply(404, Map.of(), "") : reply(200, Map.of(), unusable));
+                try { refusing.overwrite(archive, "slot-id", "folder", "test-token", ignored -> {}); throw new AssertionError("unusable slot was written"); }
+                catch (GoogleDriveSnapshotStore.SlotUnavailable expected) { }
+            }
+            var redirected = new AtomicInteger();
+            var wrongFile = new GoogleDriveSnapshotStore(request -> {
+                int step = redirected.getAndIncrement();
+                if (step == 0) return reply(200, Map.of(), "{\"id\":\"slot-id\",\"parents\":[\"folder\"],\"trashed\":false,\"capabilities\":{\"canEdit\":true}}");
+                if (step == 1) return reply(200, Map.of(), "{\"storageQuota\":{}}");
+                if (step == 2) return reply(200, Map.of("Location", List.of("https://www.googleapis.com/upload/drive/v3/files/slot-id?upload_id=test")), "");
+                if (step == 3) return reply(308, Map.of("Range", List.of("bytes=0-8388607")), "");
+                return reply(200, Map.of(), metadata);
+            });
+            try { wrongFile.overwrite(archive, "slot-id", "folder", "test-token", ignored -> {}); throw new AssertionError("a different file was accepted as the slot"); }
+            catch (IOException expected) { check(!(expected instanceof GoogleDriveSnapshotStore.SlotUnavailable)); }
             // An access token that expires mid-upload is refreshed; the chunk is resumed with the new token.
             var refreshCalls = new AtomicInteger();
             var tokenNow = new java.util.concurrent.atomic.AtomicReference<>("old-token");

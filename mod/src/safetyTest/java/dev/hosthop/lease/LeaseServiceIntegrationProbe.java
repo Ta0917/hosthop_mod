@@ -63,6 +63,7 @@ public final class LeaseServiceIntegrationProbe {
             var client = new LeaseAuthorityClient(base, "a".repeat(43), LeaseAuthorityClient.httpExchange(http, Duration.ofSeconds(5)), System::nanoTime, System::currentTimeMillis);
             var downloads = new java.util.concurrent.atomic.AtomicInteger();
             var baseAvailable = new java.util.concurrent.atomic.AtomicBoolean(true);
+            var overwrites = new java.util.concurrent.atomic.AtomicInteger();
             SnapshotStore storage = new SnapshotStore() {
                 private int uploaded;
                 private final java.util.Map<String, Path> objects = new java.util.HashMap<>();
@@ -72,6 +73,19 @@ public final class LeaseServiceIntegrationProbe {
                     Path target = directory.resolve("remote-" + uploaded + ".zip");
                     Files.copy(archive, target);
                     objects.put(fileId, target);
+                    var digest = java.util.HexFormat.of().formatHex(MessageDigestHolder.sha256(Files.readAllBytes(target)));
+                    long size = Files.size(target);
+                    try { post(http, base, "/test-object", "{\"fileId\":\"" + fileId + "\",\"digest\":\"" + digest + "\",\"size\":" + size + "}"); }
+                    catch (InterruptedException interrupted) { throw interrupted; }
+                    catch (Exception failure) { throw new java.io.IOException(failure); }
+                    return new GoogleDriveSnapshotStore.ObjectRef(fileId, digest, size);
+                }
+                @Override public GoogleDriveSnapshotStore.ObjectRef overwrite(Path archive, String fileId, String folder, String driveToken,
+                                                                              java.util.function.LongConsumer progress) throws java.io.IOException, InterruptedException {
+                    Path target = objects.get(fileId);
+                    if (target == null) throw new GoogleDriveSnapshotStore.SlotUnavailable();
+                    Files.copy(archive, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    overwrites.incrementAndGet();
                     var digest = java.util.HexFormat.of().formatHex(MessageDigestHolder.sha256(Files.readAllBytes(target)));
                     long size = Files.size(target);
                     try { post(http, base, "/test-object", "{\"fileId\":\"" + fileId + "\",\"digest\":\"" + digest + "\",\"size\":" + size + "}"); }
@@ -169,7 +183,7 @@ public final class LeaseServiceIntegrationProbe {
             check(nextGate.beginGracefulStop(nextAcquisition.attempt(), System.nanoTime(), System.currentTimeMillis()));
             nextTransfer.publishAfterStopped(nextAcquisition, preparedB, finalArchive2, journal2, "op-2", "folder", "drive-test-token");
             check(nextGate.phase() == LocalHostGate.Phase.IDLE && !Files.exists(journal2));
-            check(client.snapshot("world").generation() == 2);
+            check(client.snapshot("world").generation() == 2 && client.snapshot("world").slots().equals(java.util.List.of("file-2")));
             check(dev.hosthop.snapshot.BinaryDelta.isDelta(remote2) && Files.size(remote2) < Files.size(finalArchive2) / 2);
             // A different client has neither the delta nor its base and fetches both.
             var deltaGate = new LocalHostGate();
@@ -317,6 +331,48 @@ public final class LeaseServiceIntegrationProbe {
                 @Override public java.nio.file.FileVisitResult visitFile(Path file, java.nio.file.attribute.BasicFileAttributes attrs) throws java.io.IOException { Files.delete(file); return java.nio.file.FileVisitResult.CONTINUE; }
                 @Override public java.nio.file.FileVisitResult postVisitDirectory(Path dir, java.io.IOException error) throws java.io.IOException { if (error != null) throw error; Files.delete(dir); return java.nio.file.FileVisitResult.CONTINUE; }
             });
+            // Handoffs write their delta into two fixed slot files instead of creating files, so a member
+            // who granted the slots once never needs another browser consent.
+            var slotRoot = Files.createDirectory(directory.resolve("slot-scenario"));
+            interface Handoff { LeaseAuthorityClient.Snapshot run(String name, String expected, String content) throws Exception; }
+            Handoff handoff = (name, expected, content) -> {
+                var handoffGate = new LocalHostGate();
+                var handoffCoordinator = new LeaseCoordinator(handoffGate, client, System::nanoTime, System::currentTimeMillis);
+                var handoffLease = handoffCoordinator.begin("world", name, "owner", 30, 2);
+                check(handoffCoordinator.acquire(handoffLease));
+                var handoffDir = Files.createDirectory(slotRoot.resolve(name));
+                var handoffTransfer = new SharedWorldTransfer(handoffGate, client, storage, System::nanoTime, System::currentTimeMillis);
+                handoffTransfer.prepare(handoffLease, null, handoffDir.resolve("initial.zip"), handoffDir.resolve("world"), "drive-test-token");
+                check(Files.readString(handoffDir.resolve("world/level.dat")).equals(expected));
+                Files.writeString(handoffDir.resolve("world/level.dat"), content);
+                Files.writeString(handoffDir.resolve("world/session.lock"), "lock");
+                check(handoffGate.beginHosting(handoffLease.attempt(), System.nanoTime(), System.currentTimeMillis()));
+                check(handoffGate.beginGracefulStop(handoffLease.attempt(), System.nanoTime(), System.currentTimeMillis()));
+                handoffTransfer.publishAfterStopped(handoffLease, handoffDir.resolve("world"), handoffDir.resolve("final.zip"),
+                        handoffDir.resolve("journal"), name + "-op", "folder", "drive-test-token");
+                check(handoffGate.phase() == LocalHostGate.Phase.IDLE);
+                return client.snapshot("world");
+            };
+            String restoredLevel = Files.readString(preparedB.resolve("level.dat"));
+            var firstSlot = handoff.run("slot-host-1", restoredLevel, "slot-1");
+            check(!firstSlot.object().fileId().equals("file-2") && firstSlot.slots().size() == 2
+                    && firstSlot.slots().containsAll(java.util.List.of("file-2", firstSlot.object().fileId())) && overwrites.get() == 0);
+            var secondSlot = handoff.run("slot-host-2", "slot-1", "slot-2");
+            check(secondSlot.object().fileId().equals("file-2") && overwrites.get() == 1 && secondSlot.slots().equals(firstSlot.slots()));
+            var thirdSlot = handoff.run("slot-host-3", "slot-2", "slot-3");
+            check(thirdSlot.object().fileId().equals(firstSlot.object().fileId()) && !thirdSlot.object().sha256().equals(firstSlot.object().sha256())
+                    && overwrites.get() == 2 && thirdSlot.slots().equals(firstSlot.slots()));
+            // The overwritten generation can no longer be restored, so history leaves it out.
+            check(client.history("world").stream().noneMatch(entry -> entry.generation() == firstSlot.generation()));
+            var readerDir = Files.createDirectory(slotRoot.resolve("reader"));
+            var readerGate = new LocalHostGate();
+            var readerCoordinator = new LeaseCoordinator(readerGate, client, System::nanoTime, System::currentTimeMillis);
+            var readerLease = readerCoordinator.begin("world", "slot-reader", "owner", 30, 2);
+            check(readerCoordinator.acquire(readerLease));
+            new SharedWorldTransfer(readerGate, client, storage, System::nanoTime, System::currentTimeMillis)
+                    .prepare(readerLease, null, readerDir.resolve("initial.zip"), readerDir.resolve("world"), "drive-test-token");
+            check(Files.readString(readerDir.resolve("world/level.dat")).equals("slot-3"));
+            check(readerCoordinator.abortBeforeHosting(readerLease));
             System.out.println("PASS: Java HTTPS client to local workerd and D1");
         } finally {
             if (relayExecutor != null) relayExecutor.shutdownNow();
@@ -366,6 +422,13 @@ public final class LeaseServiceIntegrationProbe {
             Files.deleteIfExists(directory.resolve("cached-sessions/previous"));
             Files.deleteIfExists(directory.resolve("cached-sessions"));
             Files.deleteIfExists(store);
+            for (int i = 1; i <= 20; i++) Files.deleteIfExists(directory.resolve("remote-" + i + ".zip"));
+            if (Files.exists(directory.resolve("slot-scenario"))) {
+                Files.walkFileTree(directory.resolve("slot-scenario"), new java.nio.file.SimpleFileVisitor<>() {
+                    @Override public java.nio.file.FileVisitResult visitFile(Path file, java.nio.file.attribute.BasicFileAttributes attrs) throws java.io.IOException { Files.delete(file); return java.nio.file.FileVisitResult.CONTINUE; }
+                    @Override public java.nio.file.FileVisitResult postVisitDirectory(Path dir, java.io.IOException error) throws java.io.IOException { if (error != null) throw error; Files.delete(dir); return java.nio.file.FileVisitResult.CONTINUE; }
+                });
+            }
             Files.delete(directory);
         }
     }

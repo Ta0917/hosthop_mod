@@ -79,7 +79,16 @@ public final class LeaseAuthorityClientTest {
         reply.set(new LeaseAuthorityClient.Reply(200, receipt.replace("file-id", "wrong-file")));
         expectFailure(() -> client.commitStatus(publication));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"generation\":4,\"digest\":\"" + digest + "\",\"object_id\":\"file-id\",\"object_size\":42}"));
-        check(client.snapshot("world").object().fileId().equals("file-id"));
+        check(client.snapshot("world").object().fileId().equals("file-id") && client.snapshot("world").slots().isEmpty());
+        String slotted = "{\"generation\":4,\"digest\":\"" + digest + "\",\"object_id\":\"file-id\",\"object_size\":42,\"base_object_id\":\"base\",\"slots\":";
+        reply.set(new LeaseAuthorityClient.Reply(200, slotted + "\"file-id,slot-b\"}"));
+        check(client.snapshot("world").slots().equals(java.util.List.of("file-id", "slot-b")) && client.snapshot("world").baseId().equals("base"));
+        reply.set(new LeaseAuthorityClient.Reply(200, slotted + "\"\"}"));
+        check(client.snapshot("world").slots().isEmpty());
+        for (String invalid : new String[]{"\"a,a\"", "\"a,b,c\"", "\"a,\"", "\"../x\"", "1"}) {
+            reply.set(new LeaseAuthorityClient.Reply(200, slotted + invalid + "}"));
+            expectFailure(() -> client.snapshot("world"));
+        }
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"world_id\":\"world\",\"operation_id\":\"op\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"result_generation\":4}"));
         check(client.release(publication).matches(publication) && client.releaseStatus(publication).matches(publication));
         reply.set(new LeaseAuthorityClient.Reply(200, "{\"world_id\":\"world\",\"owner\":\"owner\",\"lease_id\":\"lease\",\"epoch\":4,\"base_generation\":3}"));

@@ -20,8 +20,6 @@ import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
 
 /** Creates a backup from a fully stopped world copy; it cannot stop Minecraft. */
 public final class SnapshotWriter {
@@ -30,6 +28,11 @@ public final class SnapshotWriter {
 
     /** Never replaces an archive; an interrupted write is left for inspection. */
     public static SnapshotVerifier.Result create(Path world, Path destination) throws IOException {
+        return create(world, destination, null);
+    }
+
+    /** As {@link #create(Path, Path)}, reporting 0..1 of the work done; the final check reports 1. */
+    public static SnapshotVerifier.Result create(Path world, Path destination, java.util.function.DoubleConsumer progress) throws IOException {
         if (Files.isSymbolicLink(world) || !Files.isDirectory(world, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Invalid world directory");
         Path root = world.toRealPath();
         Path target = destination.toAbsolutePath().normalize();
@@ -38,6 +41,10 @@ public final class SnapshotWriter {
         Path realTarget = parent.toRealPath().resolve(target.getFileName()).normalize();
         if (realTarget.startsWith(root)) throw new IOException("Archive must be outside the world");
         var paths = scan(root);
+        long expected = 0;
+        for (Path path : paths) expected += Files.size(path);
+        // Hashing and writing each read the world once; the final verification is the rest.
+        var bytes = new ByteProgress(ByteProgress.range(progress, 0, 0.85), 2 * expected);
         var files = new ArrayList<FileData>();
         var folded = new HashSet<String>();
         long total = 0;
@@ -51,7 +58,7 @@ public final class SnapshotWriter {
             var digest = digest();
             try (var input = Files.newInputStream(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
                 int count;
-                while ((count = input.read(hashBuffer)) != -1) digest.update(hashBuffer, 0, count);
+                while ((count = input.read(hashBuffer)) != -1) { digest.update(hashBuffer, 0, count); bytes.add(count); }
             }
             checkUnchanged(before, attributes(path));
             files.add(new FileData(path, name, before.size(), HexFormat.of().formatHex(digest.digest())));
@@ -60,50 +67,79 @@ public final class SnapshotWriter {
         byte[] manifest = manifest(files);
         // An uncompressed upper estimate plus ZIP/manifest overhead avoids relying on compression.
         DiskSpace.require(parent, total + total / 1000 + (long) files.size() * 1024 + manifest.length + 1024 * 1024);
+        // Deflating is nearly all of the time, so files are compressed in parallel and written in order. The bytes
+        // are the same as a single-threaded ZipOutputStream's (see DeflatedZipWriter).
+        int threads = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors() - 1));
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(threads, task -> {
+            var thread = new Thread(task, "hosthop-compress");
+            thread.setDaemon(true);
+            return thread;
+        });
         try (var channel = FileChannel.open(realTarget, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
-             var zip = new ZipOutputStream(Channels.newOutputStream(channel))) {
-            zip.setLevel(1);
-            zip.putNextEntry(entry("hosthop-manifest.json"));
-            zip.write(manifest);
-            zip.closeEntry();
-            byte[] buffer = new byte[1024 * 1024];
+             var stream = new java.io.BufferedOutputStream(Channels.newOutputStream(channel), 1024 * 1024)) {
+            var zip = new DeflatedZipWriter(stream);
+            zip.add("hosthop-manifest.json", DeflatedZipWriter.Deflated.of(new java.io.ByteArrayInputStream(manifest), (data, length) -> {}));
+            var pending = new java.util.ArrayDeque<java.util.concurrent.Future<DeflatedZipWriter.Deflated>>();
+            int submitted = 0;
             for (var file : files) {
-                var before = attributes(file.path());
-                zip.putNextEntry(entry("world/" + file.name()));
-                var digest = digest();
-                long count = 0;
-                try (var input = Files.newInputStream(file.path(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
-                    int read;
-                    while ((read = input.read(buffer)) != -1) {
-                        count += read;
-                        if (count > file.size()) throw new IOException("World file grew during backup");
-                        digest.update(buffer, 0, read);
-                        zip.write(buffer, 0, read);
-                    }
+                while (submitted < files.size() && pending.size() < threads * 2) {
+                    var next = files.get(submitted++);
+                    pending.add(next.size() > inMemoryLimit ? java.util.concurrent.CompletableFuture.completedFuture(null)
+                            : pool.submit(() -> readChecked(next, bytes, input -> DeflatedZipWriter.Deflated.of(input, (data, length) -> {}))));
                 }
-                zip.closeEntry();
-                checkUnchanged(before, attributes(file.path()));
-                if (count != file.size() || !HexFormat.of().formatHex(digest.digest()).equals(file.digest()))
-                    throw new IOException("World file changed during backup");
+                DeflatedZipWriter.Deflated deflated;
+                try { deflated = pending.removeFirst().get(); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new java.io.InterruptedIOException("Backup interrupted");
+                } catch (java.util.concurrent.ExecutionException failed) {
+                    if (failed.getCause() instanceof IOException io) throw io;
+                    throw new IOException("Backup compression failed", failed.getCause());
+                }
+                if (deflated != null) zip.add("world/" + file.name(), deflated);
+                else readChecked(file, bytes, input -> { zip.add("world/" + file.name(), input, (data, length) -> {}); return null; });
             }
             if (!paths.equals(scan(root))) throw new IOException("World file set changed during backup");
             zip.finish();
-            zip.flush();
+            stream.flush();
             channel.force(true);
-        }
-        return SnapshotVerifier.verify(realTarget);
+        } finally { pool.shutdownNow(); }
+        var result = SnapshotVerifier.verify(realTarget);
+        if (progress != null) progress.accept(1.0);
+        return result;
     }
 
-    /**
-     * A fixed, time-zone independent entry time keeps the archive bytes identical for identical content.
-     * Otherwise every local header carries the current time and each changes the delta chunk it falls in.
-     * File times are not worth keeping: a restored world gets fresh ones anyway.
-     */
-    private static final java.time.LocalDateTime ENTRY_TIME = java.time.LocalDateTime.of(2000, 1, 1, 0, 0);
-    private static ZipEntry entry(String name) {
-        var entry = new ZipEntry(name);
-        entry.setTimeLocal(ENTRY_TIME);
-        return entry;
+    /** Larger files are compressed while being written instead of being held in memory. Tests lower it. */
+    static volatile long inMemoryLimit = 256L * 1024 * 1024;
+
+    @FunctionalInterface private interface Reader<T> { T read(java.io.InputStream input) throws IOException; }
+
+    /** Reads a file once, failing if it is not exactly the file that was hashed into the manifest. */
+    private static <T> T readChecked(FileData file, ByteProgress bytes, Reader<T> reader) throws IOException {
+        var before = attributes(file.path());
+        var digest = digest();
+        long[] count = {0};
+        T result;
+        try (var raw = Files.newInputStream(file.path(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+            var input = new java.io.FilterInputStream(raw) {
+                @Override public int read() throws IOException { throw new IOException("Unsupported single-byte read"); }
+                @Override public int read(byte[] b, int off, int len) throws IOException {
+                    int read = super.read(b, off, len);
+                    if (read > 0) {
+                        count[0] += read;
+                        if (count[0] > file.size()) throw new IOException("World file grew during backup");
+                        digest.update(b, off, read);
+                        bytes.add(read);
+                    }
+                    return read;
+                }
+            };
+            result = reader.read(input);
+        }
+        checkUnchanged(before, attributes(file.path()));
+        if (count[0] != file.size() || !HexFormat.of().formatHex(digest.digest()).equals(file.digest()))
+            throw new IOException("World file changed during backup");
+        return result;
     }
 
     private static List<Path> scan(Path root) throws IOException {

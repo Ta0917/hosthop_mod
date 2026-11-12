@@ -120,3 +120,9 @@ CREATE TABLE snapshot_bases (
     world_id TEXT NOT NULL, object_id TEXT NOT NULL, base_object_id TEXT NOT NULL,
     PRIMARY KEY (world_id, object_id)
 );
+
+-- Overwritable delta files shared by all members (see delta_slots_migration.sql).
+CREATE TABLE delta_slots (
+    world_id TEXT NOT NULL, object_id TEXT NOT NULL,
+    PRIMARY KEY (world_id, object_id)
+);

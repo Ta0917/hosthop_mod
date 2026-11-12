@@ -103,6 +103,45 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
     }
 
     @Override public ObjectRef upload(Path archive, String folderId, String accessToken, java.util.function.LongConsumer progress) throws IOException, InterruptedException {
+        return send(archive, null, folderId, accessToken, progress);
+    }
+
+    /**
+     * Replaces the content of an existing file in the folder, keeping its ID, so members who already granted it
+     * can read the new content without another browser consent. Drive switches content only when the upload
+     * completes; the caller must never pass the file the current snapshot points to.
+     */
+    @Override public ObjectRef overwrite(Path archive, String fileId, String folderId, String accessToken, java.util.function.LongConsumer progress)
+            throws IOException, InterruptedException {
+        if (fileId == null || !fileId.matches("[A-Za-z0-9_-]{1,200}")) throw new IllegalArgumentException("Invalid Drive file");
+        if (folderId == null || !folderId.matches("[A-Za-z0-9_-]{1,200}") || accessToken == null
+                || accessToken.isBlank() || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
+            throw new IllegalArgumentException("Invalid Drive credentials or folder");
+        var request = HttpRequest.newBuilder(URI.create("https://www.googleapis.com/drive/v3/files/" + fileId
+                + "?fields=id,parents,trashed,capabilities%2FcanEdit")).timeout(Duration.ofSeconds(15))
+                .header("Authorization", "Bearer " + accessToken).GET().build();
+        Reply reply = transport.send(request);
+        if (reply == null || reply.status() == 403 || reply.status() == 404) throw new SlotUnavailable();
+        if (reply.status() != 200) throw new IOException("Drive slot check failed");
+        boolean usable;
+        try {
+            var json = JsonParser.parseString(new String(reply.body(), StandardCharsets.UTF_8)).getAsJsonObject();
+            boolean inFolder = false;
+            for (var item : json.getAsJsonArray("parents")) if (folderId.equals(item.getAsString())) inFolder = true;
+            var capabilities = json.getAsJsonObject("capabilities");
+            usable = fileId.equals(json.get("id").getAsString()) && inFolder && !json.get("trashed").getAsBoolean()
+                    && capabilities != null && capabilities.get("canEdit").getAsBoolean();
+        } catch (RuntimeException invalid) { throw new IOException("Invalid Drive slot metadata", invalid); }
+        if (!usable) throw new SlotUnavailable();
+        return send(archive, fileId, folderId, accessToken, progress);
+    }
+
+    /** The slot is missing, trashed, outside the folder or not writable by this account. */
+    public static final class SlotUnavailable extends IOException {
+        public SlotUnavailable() { super("Drive slot is unavailable"); }
+    }
+
+    private ObjectRef send(Path archive, String existing, String folderId, String accessToken, java.util.function.LongConsumer progress) throws IOException, InterruptedException {
         if (progress == null) throw new IllegalArgumentException("Missing progress callback");
         if (folderId == null || !folderId.matches("[A-Za-z0-9_-]{1,200}") || accessToken == null
                 || accessToken.isBlank() || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
@@ -117,17 +156,22 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         String name = expectedHash + ".zip";
         var metadata = new JsonObject();
         metadata.addProperty("name", name);
-        var parents = new JsonArray(); parents.add(folderId); metadata.add("parents", parents);
-        var initial = HttpRequest.newBuilder(INITIATE).timeout(Duration.ofSeconds(60))
+        // An update keeps the file's parents; the name follows the content so the authority can verify it.
+        if (existing == null) { var parents = new JsonArray(); parents.add(folderId); metadata.add("parents", parents); }
+        var start = HttpRequest.newBuilder(existing == null ? INITIATE : URI.create("https://www.googleapis.com/upload/drive/v3/files/"
+                        + existing + "?uploadType=resumable&fields=id,name,size,sha256Checksum,parents,trashed"))
+                .timeout(Duration.ofSeconds(60))
                 .header("Authorization", "Bearer " + accessToken).header("Content-Type", "application/json; charset=UTF-8")
-                .header("X-Upload-Content-Type", "application/zip").header("X-Upload-Content-Length", Long.toString(size))
-                .POST(HttpRequest.BodyPublishers.ofString(metadata.toString())).build();
+                .header("X-Upload-Content-Type", "application/zip").header("X-Upload-Content-Length", Long.toString(size));
+        var initial = (existing == null ? start.POST(HttpRequest.BodyPublishers.ofString(metadata.toString()))
+                : start.method("PATCH", HttpRequest.BodyPublishers.ofString(metadata.toString()))).build();
         Reply response = transport.send(initial);
+        if (existing != null && (response.status() == 403 || response.status() == 404) && !rateLimited(response)) throw new SlotUnavailable();
         if (response.status() != 200) throw new IOException("Drive could not start upload");
         URI session;
         try { session = URI.create(response.headers().firstValue("Location").orElseThrow()); }
         catch (RuntimeException invalid) { throw new IOException("Invalid Drive upload session", invalid); }
-        if (!trustedSession(session)) throw new IOException("Untrusted Drive upload session");
+        if (!trustedSession(session, existing)) throw new IOException("Untrusted Drive upload session");
         long offset = 0;
         int retries = 0;
         String token = accessToken;
@@ -177,7 +221,9 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
             if (input.size() != size) throw new IOException("Snapshot changed during upload");
         }
         if (!hashFile(archive).equals(expectedHash)) throw new IOException("Snapshot changed during upload");
-        return validateMetadata(finalResponse, folderId, name, expectedHash, size);
+        var object = validateMetadata(finalResponse, folderId, name, expectedHash, size);
+        if (existing != null && !existing.equals(object.fileId())) throw new IOException("Drive updated a different file");
+        return object;
     }
 
     private String currentToken(String fallback) throws IOException, InterruptedException {
@@ -369,10 +415,11 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         } catch (RuntimeException invalid) { throw new IOException("Invalid Drive object metadata", invalid); }
     }
 
-    private static boolean trustedSession(URI uri) {
+    private static boolean trustedSession(URI uri, String existing) {
         return "https".equalsIgnoreCase(uri.getScheme()) && "www.googleapis.com".equalsIgnoreCase(uri.getHost())
                 && (uri.getPort() == -1 || uri.getPort() == 443) && uri.getUserInfo() == null && uri.getFragment() == null
-                && "/upload/drive/v3/files".equals(uri.getPath()) && uri.getRawQuery() != null;
+                && ("/upload/drive/v3/files".equals(uri.getPath()) || (existing != null && ("/upload/drive/v3/files/" + existing).equals(uri.getPath())))
+                && uri.getRawQuery() != null;
     }
 
     private static String hashFile(Path file) throws IOException {

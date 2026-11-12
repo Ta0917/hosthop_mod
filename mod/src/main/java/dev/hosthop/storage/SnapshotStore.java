@@ -5,7 +5,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.function.LongConsumer;
 
-/** Storage used by the shared-world lifecycle; operations create new objects only. */
+/** Storage used by the shared-world lifecycle; only handoff delta slots are ever overwritten. */
 public interface SnapshotStore {
     /** Check capacity against an estimated upload size, if supported. */
     default void checkUploadCapacity(long bytes, String accessToken) throws IOException, InterruptedException {}
@@ -16,6 +16,11 @@ public interface SnapshotStore {
         var object = upload(archive, folderId, accessToken);
         progress.accept(100);
         return object;
+    }
+    /** Replace an existing slot's content, keeping its ID; stores without slots always create new objects instead. */
+    default GoogleDriveSnapshotStore.ObjectRef overwrite(Path archive, String fileId, String folderId, String accessToken, LongConsumer progress)
+            throws IOException, InterruptedException {
+        throw new GoogleDriveSnapshotStore.SlotUnavailable();
     }
     SnapshotVerifier.Result download(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String accessToken) throws IOException, InterruptedException;
     default SnapshotVerifier.Result download(GoogleDriveSnapshotStore.ObjectRef object, Path destination, String accessToken, LongConsumer progress) throws IOException, InterruptedException {

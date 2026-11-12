@@ -40,7 +40,7 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       || !sql?.cancelAcquisition || !sql?.cancelAcquisitionStatus || !sql?.history || !sql?.recoverStopped
       || !sql?.checkpoint || !sql?.checkpointStatus || !sql?.checkpointHistory || !sql?.checkpointFull
       || !sql?.checkpointDelete || !sql?.checkpointDeleteStatus || !sql?.checkpointRetention || !sql?.checkpointRetentionSet || !sql?.checkpointPrune || !sql?.checkpointPruneDelete
-      || !sql?.checkpointTrashPending || !sql?.checkpointTrashDone)
+      || !sql?.checkpointTrashPending || !sql?.checkpointTrashDone || !sql?.snapshotBaseRecord || !sql?.deltaSlotAdd || !sql?.deltaSlotRelease)
     throw new Error('missing SQL');
   return {
     async fetch(request, env) {
@@ -72,7 +72,8 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
       if (['/commit', '/commit-status', '/recover-stopped'].includes(route) && (!identifier(body.operation) || !Number.isSafeInteger(body.previousGeneration)
           || body.previousGeneration < 0 || typeof body.digest !== 'string' || !/^[0-9a-f]{64}$/.test(body.digest)
           || typeof body.fileId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(body.fileId)
-          || !Number.isSafeInteger(body.size) || body.size < 1 || body.size > 68_719_476_736))
+          || !Number.isSafeInteger(body.size) || body.size < 1 || body.size > 68_719_476_736
+          || (body.slot !== undefined && (typeof body.slot !== 'string' || (body.slot !== '' && !/^[A-Za-z0-9_-]{1,200}$/.test(body.slot))))))
         return json({ error: 'invalid request' }, 400);
       if (['/release', '/release-status'].includes(route) && (!identifier(body.operation)
           || !Number.isSafeInteger(body.resultGeneration) || body.resultGeneration < 1))
@@ -222,12 +223,21 @@ export function createLeaseService(sql, verifyObject = verifyDriveObject) {
         const matches = row => row && row.owner === member.owner && row.lease_id === body.lease && row.epoch === body.epoch
           && row.previous_generation === body.previousGeneration && row.digest === body.digest && row.object_id === body.fileId
           && row.object_size === body.size && row.result_generation === body.previousGeneration + 1;
-        // Best effort, and repeated on a retry whose first response was lost: a missing record only
-        // means guests authorize the base in a second step.
+        // Best effort, and repeated on a retry whose first response was lost: a missing base record only
+        // means guests authorize the base in a second step, and a missing slot is added by a later host.
         const recordBase = async () => {
-          if (route === '/commit-status' || typeof body.baseFileId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(body.baseFileId)
-              || body.baseFileId === body.fileId) return;
-          try { await env.DB.prepare(sql.snapshotBaseRecord).bind(body.world, body.fileId, body.baseFileId).run(); } catch { }
+          if (route === '/commit-status') return;
+          if (typeof body.baseFileId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(body.baseFileId) && body.baseFileId !== body.fileId) {
+            try { await env.DB.prepare(sql.snapshotBaseRecord).bind(body.world, body.fileId, body.baseFileId, body.digest).run(); } catch { }
+          }
+          // A new delta file becomes an overwritable slot, replacing one the host could not write.
+          // Both statements only act while this object is still the current snapshot.
+          if (typeof body.slot === 'string') {
+            try {
+              if (body.slot !== '') await env.DB.prepare(sql.deltaSlotRelease).bind(body.world, body.fileId, body.slot, body.digest).run();
+              await env.DB.prepare(sql.deltaSlotAdd).bind(body.world, body.fileId, body.digest).run();
+            } catch { }
+          }
         };
         let receipt = await find();
         if (receipt) {

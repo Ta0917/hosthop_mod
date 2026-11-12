@@ -83,19 +83,18 @@ public final class SharedWorldTransfer {
         Path base = checkpointBaseArchive == null ? baseArchive : checkpointBaseArchive;
         String baseId = "";
         if (!full && checkpointBase != null && base != null && storage.canUseBase(checkpointBase, folder, token)) {
-            Path delta = directory.resolve("checkpoint-delta.bin"), verified = directory.resolve("checkpoint-verified.zip");
-            boolean created = false, verifiedCreated = false;
+            Path delta = directory.resolve("checkpoint-delta.bin");
+            boolean created = false;
             try {
                 BinaryDelta.create(base, checkpointBase, archive, delta); created = true;
                 if (Files.size(delta) < Files.size(archive) * 3 / 4) {
-                    BinaryDelta.apply(delta, base, verified); verifiedCreated = true;
-                    if (Files.mismatch(archive, verified) != -1) throw new IOException("Checkpoint delta mismatch");
+                    BinaryDelta.verifyRebuild(delta, base, archive, null);
                     upload = delta;
                     baseId = checkpointBase.fileId();
                 } else Files.delete(delta);
             } catch (IOException invalid) {
                 if (created) Files.deleteIfExists(delta);
-            } finally { if (verifiedCreated) Files.deleteIfExists(verified); }
+            }
         }
         var object = storage.upload(upload, folder, token);
         CheckpointRecord operation;
@@ -201,34 +200,53 @@ public final class SharedWorldTransfer {
             throw new IllegalArgumentException("Invalid publication operation");
         if (!gate.serverStoppedForSnapshot(acquisition.attempt(), nanos.getAsLong(), millis.getAsLong()))
             throw new IOException("Server stop was not accepted");
-        try (var lock = StoppedWorldLock.acquire(stoppedWorld)) { SnapshotWriter.create(stoppedWorld, archive); }
+        // Compressing, building and checking the delta take a while before the upload starts, so the shown
+        // percentage covers the whole save, not just the upload.
+        var progress = new SaveProgress();
+        progress.at(0);
+        long started = System.nanoTime();
+        try (var lock = StoppedWorldLock.acquire(stoppedWorld)) { SnapshotWriter.create(stoppedWorld, archive, progress.stage(0, 35)); }
+        long archived = System.nanoTime(), deltaDone = archived, verifyDone = archived;
         Path upload = archive;
         if (baseRef != null && baseArchive != null && storage.canUseBase(baseRef, folderId, driveToken)) {
             Path delta = archive.resolveSibling("delta.bin");
-            Path verified = archive.resolveSibling("delta-verified.zip");
-            if (!Files.exists(delta, java.nio.file.LinkOption.NOFOLLOW_LINKS) && !Files.exists(verified, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                boolean deltaCreated = false, verifiedCreated = false;
+            if (!Files.exists(delta, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                boolean deltaCreated = false;
                 try {
-                    BinaryDelta.create(baseArchive, baseRef, archive, delta);
+                    BinaryDelta.create(baseArchive, baseRef, archive, delta, progress.stage(35, 55));
                     deltaCreated = true;
-                    if (Files.size(delta) < Files.size(archive) * 3 / 4) {
-                        BinaryDelta.apply(delta, baseArchive, verified);
-                        verifiedCreated = true;
-                        if (Files.mismatch(archive, verified) != -1) throw new IOException("Delta verification mismatch");
+                    deltaDone = System.nanoTime();
+                    // A new base is a new file every member must grant in the browser, so a handoff keeps the
+                    // current base for as long as the delta is still smaller than the whole world.
+                    if (Files.size(delta) < Files.size(archive)) {
+                        BinaryDelta.verifyRebuild(delta, baseArchive, archive, progress.stage(55, 70));
+                        verifyDone = System.nanoTime();
                         upload = delta;
                     } else Files.delete(delta);
                 } catch (IOException deltaError) {
                     com.mojang.logging.LogUtils.getLogger().warn("HostHop delta unavailable; using full snapshot ({})", deltaError.getClass().getSimpleName());
                     if (deltaCreated) Files.deleteIfExists(delta);
-                } finally { if (verifiedCreated) Files.deleteIfExists(verified); }
+                }
             }
         }
-        GoogleDriveSnapshotStore.ObjectRef object;
-        try { object = storage.upload(upload, folderId, driveToken, uploadProgress); }
-        catch (IOException | InterruptedException failure) {
-            com.mojang.logging.LogUtils.getLogger().warn("HostHop snapshot upload failed ({})", failure.getClass().getSimpleName());
-            throw failure;
+        GoogleDriveSnapshotStore.ObjectRef object = null;
+        String slot = null;
+        var uploading = progress.upload();
+        long uploadStarted = System.nanoTime();
+        if (!upload.equals(archive)) {
+            var written = writeSlot(acquisition, upload, folderId, driveToken, uploading);
+            object = written.object(); slot = written.registration();
         }
+        if (object == null) {
+            try { object = storage.upload(upload, folderId, driveToken, uploading); }
+            catch (IOException | InterruptedException failure) {
+                com.mojang.logging.LogUtils.getLogger().warn("HostHop snapshot upload failed ({})", failure.getClass().getSimpleName());
+                throw failure;
+            }
+        }
+        com.mojang.logging.LogUtils.getLogger().info("HostHop final save: archive {} ms, delta {} ms, check {} ms, upload {} ms ({}, {} bytes)",
+                (archived - started) / 1_000_000, (deltaDone - archived) / 1_000_000, (verifyDone - deltaDone) / 1_000_000,
+                (System.nanoTime() - uploadStarted) / 1_000_000, upload.equals(archive) ? "full" : "delta", Files.size(upload));
         driveToken = fresh(driveToken);
         if (!upload.equals(archive) && !storage.canUseBase(baseRef, folderId, driveToken))
             throw new IOException("Delta base is unavailable before commit");
@@ -239,7 +257,7 @@ public final class SharedWorldTransfer {
         if (!PublicationPreparation.prepare(gate, acquisition.attempt(), journal, operation, nanos, millis))
             throw new IOException("Lease expired before publication");
         try {
-            var receipt = authority.commit(operation, driveToken, upload.equals(archive) ? "" : baseRef.fileId());
+            var receipt = authority.commit(operation, driveToken, upload.equals(archive) ? "" : baseRef.fileId(), slot);
             if (!gate.publicationConfirmed(acquisition.attempt(), receipt, nanos.getAsLong(), millis.getAsLong()))
                 throw new IOException("Publication needs reconciliation");
         } catch (IOException | InterruptedException | RuntimeException failure) {
@@ -248,6 +266,52 @@ public final class SharedWorldTransfer {
         }
         completeRelease(acquisition.attempt(), journal, operation, retainJournal);
         return operation;
+    }
+
+    private record SlotWrite(GoogleDriveSnapshotStore.ObjectRef object, String registration) {}
+
+    /** One percentage for a whole final save. It never goes back, and reaches 100 only when the upload has. */
+    private final class SaveProgress {
+        private int shown = -1;
+        synchronized void at(double percent) {
+            int value = (int) Math.max(0, Math.min(100, Math.floor(percent)));
+            if (value > shown) { shown = value; uploadProgress.accept(value); }
+        }
+        java.util.function.DoubleConsumer stage(double from, double to) { return fraction -> at(from + (to - from) * fraction); }
+        synchronized java.util.function.LongConsumer upload() {
+            double from = Math.max(0, shown);
+            return percent -> at(from + (100 - from) * Math.max(0, Math.min(100, percent)) / 100.0);
+        }
+    }
+
+    /**
+     * Writes a handoff delta into the slot the current snapshot does not use, so members who granted the slots
+     * once never need the browser again. Returns no object when a new file must be created instead; its
+     * registration then adds a slot (empty) or replaces one this account cannot write (its ID).
+     */
+    private SlotWrite writeSlot(LeaseCoordinator.Acquisition acquisition, Path delta, String folderId, String driveToken,
+                                java.util.function.LongConsumer progress) throws IOException, InterruptedException {
+        LeaseAuthorityClient.Snapshot current;
+        try { current = authority.snapshot(acquisition.world()); }
+        catch (IOException unavailable) {
+            com.mojang.logging.LogUtils.getLogger().warn("HostHop delta slots unavailable ({})", unavailable.getClass().getSimpleName());
+            return new SlotWrite(null, null);
+        }
+        // The lease keeps the snapshot fixed; anything else means this is not the snapshot the delta follows.
+        if (current.generation() != acquisition.generation()) return new SlotWrite(null, null);
+        if (current.slots().size() < 2) return new SlotWrite(null, "");
+        String unwritable = null;
+        for (String slot : current.slots()) {
+            if (slot.equals(current.object().fileId())) continue;
+            try { return new SlotWrite(storage.overwrite(delta, slot, folderId, driveToken, progress), null); }
+            catch (GoogleDriveSnapshotStore.SlotUnavailable unavailable) { unwritable = slot; }
+            catch (IOException failure) {
+                // The slot is not the current snapshot, so a failed write leaves the world intact.
+                com.mojang.logging.LogUtils.getLogger().warn("HostHop delta slot write failed; creating a new file ({})", failure.getClass().getSimpleName());
+                return new SlotWrite(null, null);
+            }
+        }
+        return new SlotWrite(null, unwritable);
     }
 
     /** Safe to retry after a lost release response. */

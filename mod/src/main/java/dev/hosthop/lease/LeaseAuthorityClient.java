@@ -52,8 +52,13 @@ public final class LeaseAuthorityClient {
     public record Grant(long epoch, long generation, ConservativeLeaseDeadline deadline) {}
     public record Endpoint(String world, long epoch, long generation, long revision, String address,
                            ConservativeLeaseDeadline deadline) {}
-    /** baseId is the full snapshot a delta head depends on, or empty when unknown (older service or full head). */
-    public record Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object, String baseId) {
+    /**
+     * baseId is the full snapshot a delta head depends on, or empty when unknown (older service or full head).
+     * slots are the overwritable delta files every member grants once, so later handoffs need no browser consent.
+     */
+    public record Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object, String baseId, List<String> slots) {
+        public Snapshot { slots = List.copyOf(slots); }
+        public Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object, String baseId) { this(generation, object, baseId, List.of()); }
         public Snapshot(long generation, GoogleDriveSnapshotStore.ObjectRef object) { this(generation, object, ""); }
     }
     public record Checkpoint(String id, long generation, GoogleDriveSnapshotStore.ObjectRef object, String kind, long createdAt) {}
@@ -223,7 +228,15 @@ public final class LeaseAuthorityClient {
                 || objectId == null || !objectId.matches("[A-Za-z0-9_-]{1,200}")) throw new IOException("Invalid snapshot reference");
         String baseId = fields.strings().get("base_object_id");
         if (baseId == null || !baseId.matches("[A-Za-z0-9_-]{1,200}") || baseId.equals(objectId)) baseId = "";
-        return new Snapshot(generation, new GoogleDriveSnapshotStore.ObjectRef(objectId, digest, size), baseId);
+        var slots = new java.util.ArrayList<String>();
+        String listed = fields.strings().get("slots");
+        if (listed != null && !listed.isEmpty()) {
+            for (String slot : listed.split(",", -1)) {
+                if (!slot.matches("[A-Za-z0-9_-]{1,200}") || slots.contains(slot) || slots.size() >= 2) throw new IOException("Invalid snapshot slots");
+                slots.add(slot);
+            }
+        }
+        return new Snapshot(generation, new GoogleDriveSnapshotStore.ObjectRef(objectId, digest, size), baseId, slots);
     }
 
     /** Returns up to four committed snapshot references, newest first. */
@@ -310,12 +323,23 @@ public final class LeaseAuthorityClient {
 
     /** baseId names the full snapshot a delta depends on so guests can be granted both files at once; empty for a full. */
     public PublicationRecord commit(PublicationRecord operation, String driveToken, String baseId) throws IOException, InterruptedException {
+        return commit(operation, driveToken, baseId, null);
+    }
+
+    /**
+     * slot registers the new delta file as an overwritable slot: empty adds it, an ID replaces that unwritable slot,
+     * and null registers nothing (an overwritten slot, or a full snapshot).
+     */
+    public PublicationRecord commit(PublicationRecord operation, String driveToken, String baseId, String slot) throws IOException, InterruptedException {
         if (baseId == null || (!baseId.isEmpty() && !baseId.matches("[A-Za-z0-9_-]{1,200}"))) throw new IllegalArgumentException("Invalid base");
+        if (slot != null && !slot.isEmpty() && (!slot.matches("[A-Za-z0-9_-]{1,200}") || slot.equals(operation.objectId())))
+            throw new IllegalArgumentException("Invalid slot");
         if (driveToken == null || driveToken.isBlank() || driveToken.length() > 2048 || driveToken.chars().anyMatch(Character::isISOControl))
             throw new IllegalArgumentException("Invalid Drive token");
         var body = publicationBody(operation);
         body.addProperty("driveToken", driveToken);
         if (!baseId.isEmpty()) body.addProperty("baseFileId", baseId);
+        if (slot != null) body.addProperty("slot", slot);
         return matchPublication(operation, post("commit", body));
     }
 
@@ -591,7 +615,7 @@ public final class LeaseAuthorityClient {
                     if (!value.matches("-?(0|[1-9][0-9]*)")) throw new IOException("Invalid response number");
                     values.put(name, Long.parseLong(value));
                 } else if (java.util.Set.of("owner", "endpoint", "world_id", "operation_id", "lease_id", "digest",
-                        "object_id", "checkpoint_id", "kind", "base_object_id").contains(name)) {
+                        "object_id", "checkpoint_id", "kind", "base_object_id", "slots").contains(name)) {
                     if (name.equals("endpoint") && reader.peek() == JsonToken.NULL) { reader.nextNull(); continue; }
                     if (reader.peek() != JsonToken.STRING) throw new IOException("Invalid response text");
                     strings.put(name, reader.nextString());

@@ -139,7 +139,7 @@ public final class HostHopScreen extends Screen {
 
     private void authorizeSnapshot() {
         long id = request.incrementAndGet();
-        busy(true, "screen.hosthop.authorizing_snapshot");
+        busy(true, "screen.hosthop.checking_snapshot");
         CompletableFuture.runAsync(() -> {
             try {
                 var vault = new WindowsSecretStore(secretPath());
@@ -173,10 +173,17 @@ public final class HostHopScreen extends Screen {
             var snapshot = authority.snapshot(invitation.world());
             var token = manager.access().accessToken();
             if (!store.canRead(snapshot.object(), token)) {
-                // When the service already told us the base, one consent page covers both files.
-                String[] files = snapshot.baseId().isEmpty() ? new String[]{snapshot.object().fileId()}
-                        : new String[]{snapshot.object().fileId(), snapshot.baseId()};
-                manager.authorizeFiles(files, invitation.folder(), open);
+                // One consent page covers the newest data, its base and every delta slot. Hosts overwrite the
+                // slots instead of creating files, so after this the next handoffs need no browser at all.
+                var files = new java.util.LinkedHashSet<String>();
+                files.add(snapshot.object().fileId());
+                if (!snapshot.baseId().isEmpty() && !store.canRead(snapshot.baseId(), token)) files.add(snapshot.baseId());
+                for (String slot : snapshot.slots()) if (!files.contains(slot) && !store.canRead(slot, token)) files.add(slot);
+                // Only now is the browser needed; saying so earlier flashed the request on every join.
+                Minecraft.getInstance().execute(() -> {
+                    if (id == request.get() && Minecraft.getInstance().gui.screen() == this) busy(true, "screen.hosthop.authorizing_snapshot");
+                });
+                manager.authorizeFiles(files.toArray(String[]::new), invitation.folder(), open);
                 token = manager.access().accessToken();
             }
             // The base comes from the service, or else from the delta's header; never download the whole delta here.
@@ -264,7 +271,7 @@ public final class HostHopScreen extends Screen {
                     // Becoming host needs the newest snapshot and its base; ask for them now, in this one click,
                     // instead of failing later and sending the player to a separate button.
                     try {
-                        minecraft.execute(() -> { if (id == request.get() && minecraft.gui.screen() == this) busy(true, "screen.hosthop.authorizing_snapshot"); });
+                        minecraft.execute(() -> { if (id == request.get() && minecraft.gui.screen() == this) busy(true, "screen.hosthop.checking_snapshot"); });
                         var manager = new DriveCredentialManager(new WindowsSecretStore(secretPath()), new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret()));
                         activeAuthorization = manager;
                         String result = ensureSnapshotAccess(id, invitation, authority, manager);

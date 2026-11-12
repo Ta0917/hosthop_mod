@@ -37,6 +37,9 @@ const endpointUpdate = load('endpoint_update.sql');
 const endpointStatus = load('endpoint_status.sql');
 const endpointRevision = load('endpoint_revision.sql');
 const snapshotStatus = load('snapshot_status.sql');
+const snapshotBaseRecord = load('snapshot_base_record.sql');
+const deltaSlotAdd = load('delta_slot_add.sql');
+const deltaSlotRelease = load('delta_slot_release.sql');
 const releaseStatus = load('release_status.sql');
 const abort = load('abort.sql');
 const abortStatus = load('abort_status.sql');
@@ -171,7 +174,8 @@ try {
   const service = createLeaseService({ acquire, renew, acquireStatus, endpointUpdate, endpointStatus, endpointRevision,
     commit, commitStatus, snapshotStatus, release, releaseStatus, abort, abortStatus, hostStatus, cancelAcquisition, cancelAcquisitionStatus, history, recoverStopped,
     checkpoint, checkpointStatus, checkpointHistory, checkpointFull, checkpointDelete, checkpointDeleteStatus,
-    checkpointRetention, checkpointRetentionSet, checkpointPrune, checkpointPruneDelete, checkpointTrashPending, checkpointTrashDone }, async () => objectVerified);
+    checkpointRetention, checkpointRetentionSet, checkpointPrune, checkpointPruneDelete, checkpointTrashPending, checkpointTrashDone,
+    snapshotBaseRecord, deltaSlotAdd, deltaSlotRelease }, async () => objectVerified);
   const env = { DB: db, MEMBERS: [{ world: 'api-world', owner: 'api-owner', tokenHash }], WORLDS: [{ id: 'api-world', folder: 'folder' }] };
   const request = (route, body, credential = token) => service.fetch(new Request(`https://example.invalid/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
@@ -339,6 +343,38 @@ try {
   }
   const recent = await (await request('history', { world: 'history-world' })).json();
   check(recent.snapshots.map(x => x.generation).join(',') === '5,4,3,2', 'history did not return latest four generations');
+  await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('slot-world').run();
+  env.MEMBERS.push({ world: 'slot-world', owner: 'api-owner', tokenHash });
+  env.WORLDS.push({ id: 'slot-world', folder: 'folder' });
+  const slotCommit = async (generation, fileId, extra) => {
+    const lease = `slot-${generation}`;
+    const g = await (await request('acquire', { world: 'slot-world', lease, duration: 120 })).json();
+    const item = { world: 'slot-world', lease, epoch: g.epoch, operation: `slot-op-${generation}`, previousGeneration: generation,
+      digest: String(generation + 1).repeat(64), fileId, size: 42, driveToken: 'temporary-token', ...extra };
+    check((await request('commit', item)).status === 200, 'slot test commit failed');
+    check((await request('release', { ...item, resultGeneration: generation + 1 })).status === 200, 'slot test release failed');
+  };
+  const slotStatus = async () => await (await request('snapshot-status', { world: 'slot-world' })).json();
+  const slotList = async () => (await slotStatus()).slots.split(',').filter(Boolean).sort().join(',');
+  await slotCommit(0, 'full-base', {});
+  check(await slotList() === '', 'full snapshot became a slot');
+  await slotCommit(1, 'slot-a', { slot: '', baseFileId: 'full-base' });
+  check(await slotList() === 'slot-a', 'first slot was not registered');
+  await slotCommit(2, 'slot-b', { slot: '', baseFileId: 'full-base' });
+  check(await slotList() === 'slot-a,slot-b', 'second slot was not registered');
+  await slotCommit(3, 'slot-a', { baseFileId: 'other-base' });
+  const overwritten = await slotStatus();
+  check(overwritten.object_id === 'slot-a' && overwritten.base_object_id === 'other-base', 'overwritten slot kept its old base');
+  check((await (await request('history', { world: 'slot-world' })).json()).snapshots.map(x => x.generation).join(',') === '4,3,1',
+    'history listed an overwritten slot generation');
+  await slotCommit(4, 'slot-c', { slot: '', baseFileId: 'other-base' });
+  check(await slotList() === 'slot-a,slot-b', 'a third slot was registered');
+  await slotCommit(5, 'slot-d', { slot: 'slot-b', baseFileId: 'other-base' });
+  check(await slotList() === 'slot-a,slot-d', 'unwritable slot was not replaced');
+  await slotCommit(6, 'slot-e', { slot: 'slot-d', baseFileId: 'other-base' });
+  check(await slotList() === 'slot-a,slot-e', 'slot replacement did not follow the current snapshot');
+  check((await request('commit', { world: 'slot-world', lease: 'x', epoch: 1, operation: 'bad-slot', previousGeneration: 0,
+    digest: 'a'.repeat(64), fileId: 'f', size: 1, slot: '../x' })).status === 400, 'invalid slot accepted');
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('abort-world').run();
   env.MEMBERS.push({ world: 'abort-world', owner: 'api-owner', tokenHash });
   env.WORLDS.push({ id: 'abort-world', folder: 'folder' });
