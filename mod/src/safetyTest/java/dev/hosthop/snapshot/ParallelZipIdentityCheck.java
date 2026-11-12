@@ -39,6 +39,30 @@ final class ParallelZipIdentityCheck {
                 long mismatch = Files.mismatch(parallel, reference);
                 if (mismatch != -1) throw new AssertionError("Parallel archive differs from ZipOutputStream at byte " + mismatch);
             }
+            // Restoring spreads files over threads; every file must come back exactly.
+            var archive = root.resolve("parallel-" + saved + ".zip");
+            var restored = root.resolve("restored");
+            SnapshotVerifier.restore(archive, restored);
+            try (var walk = Files.walk(world)) {
+                for (var file : walk.filter(Files::isRegularFile).toList()) {
+                    var copy = restored.resolve(world.relativize(file).toString());
+                    if (Files.mismatch(file, copy) != -1) throw new AssertionError("Restored file differs: " + file.getFileName());
+                }
+            }
+            // A damaged file anywhere must fail both checks and leave no partly restored world behind.
+            var damaged = root.resolve("damaged.zip");
+            Files.copy(archive, damaged);
+            try (var channel = java.nio.channels.FileChannel.open(damaged, java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE)) {
+                long position = Files.size(damaged) / 3;
+                var one = java.nio.ByteBuffer.allocate(1); channel.read(one, position);
+                channel.write(java.nio.ByteBuffer.wrap(new byte[] {(byte) (one.array()[0] ^ 0x5a)}), position);
+            }
+            try { SnapshotVerifier.verify(damaged); throw new AssertionError("Damaged archive verified"); }
+            catch (java.io.IOException expected) { }
+            var rejected = root.resolve("rejected");
+            try { SnapshotVerifier.restore(damaged, rejected); throw new AssertionError("Damaged archive restored"); }
+            catch (java.io.IOException expected) { }
+            if (Files.exists(rejected)) throw new AssertionError("Partly restored world left behind");
         } finally {
             try (var walk = Files.walk(root)) {
                 for (var path : walk.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);

@@ -211,9 +211,19 @@ public final class BinaryDelta {
 
     /** As {@link #apply(Path, Path, Path)}, reporting 0..1; the final archive check reports 1. */
     public static void apply(Path delta, Path base, Path target, java.util.function.DoubleConsumer progress) throws IOException {
-        Parsed parsed = parse(delta);
         // Hashing the base and writing the target; verifying the rebuilt archive is the rest.
-        var done = new ByteProgress(ByteProgress.range(progress, 0, 0.7), Files.size(base) + parsed.info().targetSize());
+        rebuild(delta, base, target, ByteProgress.range(progress, 0, 0.6));
+        SnapshotVerifier.verify(target, ByteProgress.range(progress, 0.6, 1));
+        if (progress != null) progress.accept(1.0);
+    }
+
+    /**
+     * Rebuilds the exact archive the delta was made from, checking its SHA-256 and length, but not the archive's
+     * contents. Only for callers that verify every file next anyway, as {@link SnapshotVerifier#restore} does.
+     */
+    public static void rebuild(Path delta, Path base, Path target, java.util.function.DoubleConsumer progress) throws IOException {
+        Parsed parsed = parse(delta);
+        var done = new ByteProgress(progress, Files.size(base) + parsed.info().targetSize());
         if (Files.size(base) != parsed.info().base().size() || !hash(base, done).equals(parsed.info().base().sha256()))
             throw new IOException("Delta base mismatch");
         try (var original = FileChannel.open(base, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
@@ -240,8 +250,7 @@ public final class BinaryDelta {
             if (output.size() != parsed.info().targetSize() || !HexFormat.of().formatHex(digest.digest()).equals(parsed.info().targetSha256()))
                 throw new IOException("Reconstructed snapshot mismatch");
         }
-        SnapshotVerifier.verify(target);
-        if (progress != null) progress.accept(1.0);
+        done.finish();
     }
 
     private static Parsed parse(Path delta) throws IOException {

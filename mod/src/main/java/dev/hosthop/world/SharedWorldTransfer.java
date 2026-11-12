@@ -138,9 +138,14 @@ public final class SharedWorldTransfer {
     public void prepare(LeaseCoordinator.Acquisition acquisition, Path initialCopy, Path archive, Path destination,
                         String driveToken, Path cacheSessions) throws IOException, InterruptedException {
         if (acquisition == null || acquisition.epoch() < 1 || acquisition.generation() < 0) throw new IllegalStateException("Lease not acquired");
+        // One percentage for the whole preparation: fetching, rebuilding and unpacking the world.
+        var progress = new StageProgress(downloadProgress);
+        progress.at(0);
+        long started = System.nanoTime(), fetched = started, rebuilt = started;
         if (acquisition.generation() == 0) {
             if (initialCopy == null) throw new IOException("Initial world copy required");
-            try (var lock = StoppedWorldLock.acquire(initialCopy)) { SnapshotWriter.create(initialCopy, archive); }
+            try (var lock = StoppedWorldLock.acquire(initialCopy)) { SnapshotWriter.create(initialCopy, archive, progress.stage(0, 55)); }
+            fetched = rebuilt = System.nanoTime();
         } else {
             var snapshot = authority.snapshot(acquisition.world());
             if (snapshot.generation() != acquisition.generation()) throw new IOException("Snapshot generation changed");
@@ -152,7 +157,8 @@ public final class SharedWorldTransfer {
                 cached = false;
             }
             if (!cached)
-                storage.downloadRaw(snapshot.object(), stored, driveToken, downloadProgress);
+                storage.downloadRaw(snapshot.object(), stored, driveToken, progress.percent(0, 30));
+            progress.at(30);
             if (BinaryDelta.isDelta(stored)) {
                 var delta = BinaryDelta.inspect(stored);
                 Path base = archive.resolveSibling("base.zip");
@@ -164,21 +170,29 @@ public final class SharedWorldTransfer {
                 if (!baseCached) {
                     if (storage instanceof GoogleDriveSnapshotStore google && !google.canRead(delta.base(), driveToken))
                         throw new BaseAccessRequired();
-                    storage.download(delta.base(), base, driveToken, downloadProgress);
+                    storage.download(delta.base(), base, driveToken, progress.percent(30, 55));
                 }
-                else SnapshotVerifier.verify(base);
-                BinaryDelta.apply(stored, base, archive);
+                fetched = System.nanoTime();
+                // A cached base matched its recorded SHA-256 exactly, and the rebuilt archive must match the delta's
+                // recorded SHA-256; restoring then checks every file against the manifest. Checking the archives'
+                // contents separately here as well only read them again.
+                BinaryDelta.rebuild(stored, base, archive, progress.stage(55, 70));
+                rebuilt = System.nanoTime();
                 baseRef = delta.base(); baseArchive = base;
             } else {
-                SnapshotVerifier.verify(stored);
+                // Restoring below checks every file of this archive against its manifest.
                 Files.move(stored, archive);
+                fetched = rebuilt = System.nanoTime();
                 baseRef = snapshot.object(); baseArchive = archive;
             }
         }
         storage.checkUploadCapacity(Files.size(archive), driveToken);
-        SnapshotVerifier.restore(archive, destination);
+        SnapshotVerifier.restore(archive, destination, progress.stage(70, 99));
+        com.mojang.logging.LogUtils.getLogger().info("HostHop world preparation: fetch {} ms, rebuild {} ms, unpack {} ms",
+                (fetched - started) / 1_000_000, (rebuilt - fetched) / 1_000_000, (System.nanoTime() - rebuilt) / 1_000_000);
         if (!gate.snapshotVerified(acquisition.attempt(), acquisition.generation(), nanos.getAsLong(), millis.getAsLong()))
             throw new IOException("Lease expired while preparing world");
+        progress.at(100);
     }
 
     /**
@@ -269,6 +283,22 @@ public final class SharedWorldTransfer {
     }
 
     private record SlotWrite(GoogleDriveSnapshotStore.ObjectRef object, String registration) {}
+
+    /** One percentage over several stages that never goes back. */
+    private static final class StageProgress {
+        private final java.util.function.LongConsumer sink;
+        private int shown = -1;
+        StageProgress(java.util.function.LongConsumer sink) { this.sink = sink; }
+        synchronized void at(double percent) {
+            int value = (int) Math.max(0, Math.min(100, Math.floor(percent)));
+            if (value > shown) { shown = value; sink.accept(value); }
+        }
+        java.util.function.DoubleConsumer stage(double from, double to) { return fraction -> at(from + (to - from) * fraction); }
+        /** For callers that report 0..100 themselves, such as downloads. */
+        java.util.function.LongConsumer percent(double from, double to) {
+            return value -> at(from + (to - from) * Math.max(0, Math.min(100, value)) / 100.0);
+        }
+    }
 
     /** One percentage for a whole final save. It never goes back, and reaches 100 only when the upload has. */
     private final class SaveProgress {

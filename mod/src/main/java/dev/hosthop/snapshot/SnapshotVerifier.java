@@ -37,24 +37,35 @@ public final class SnapshotVerifier {
     public record Result(int files, long uncompressedBytes) {}
 
     /** Verification does not prevent subsequent archive modification; caller must protect the file. */
-    public static Result verify(Path path) throws IOException {
+    public static Result verify(Path path) throws IOException { return verify(path, null); }
+
+    /** As {@link #verify(Path)}, reporting 0..1 of the bytes checked. */
+    public static Result verify(Path path, java.util.function.DoubleConsumer progress) throws IOException {
         if (Files.size(path) > MAX_TOTAL) throw new IOException("Archive too large");
-        try (var archive = ZipFile.builder().setPath(path).get()) {
-            return verifyArchive(archive).result();
-        }
+        Verified structure;
+        try (var archive = ZipFile.builder().setPath(path).get()) { structure = verifyStructure(archive); }
+        checkContents(path, structure, null, progress);
+        return structure.result();
     }
 
-    /** Restores only to a new directory. Partial output is retained on failure. */
-    public static Result restore(Path path, Path destination) throws IOException {
+    /** Restores only to a new directory, removed again if any file fails its check. */
+    public static Result restore(Path path, Path destination) throws IOException { return restore(path, destination, null); }
+
+    /**
+     * As {@link #restore(Path, Path)}, reporting 0..1. Every file is checked against the manifest while it is
+     * written, in parallel, instead of reading the whole archive once to check it and again to write it.
+     */
+    public static Result restore(Path path, Path destination, java.util.function.DoubleConsumer progress) throws IOException {
         if (Files.size(path) > MAX_TOTAL) throw new IOException("Archive too large");
         Path root = destination.toAbsolutePath().normalize();
-        try (var archive = ZipFile.builder().setPath(path).get()) {
-            var verified = verifyArchive(archive);
-            DiskSpace.require(root.getParent(), verified.result().uncompressedBytes());
-            Files.createDirectory(root);
-            byte[] buffer = new byte[1024 * 1024];
-            for (var item : verified.files().entrySet()) {
-                var parts = item.getKey().split("/");
+        Verified structure;
+        try (var archive = ZipFile.builder().setPath(path).get()) { structure = verifyStructure(archive); }
+        DiskSpace.require(root.getParent(), structure.result().uncompressedBytes());
+        Files.createDirectory(root);
+        try {
+            var outputs = new HashMap<String, Path>();
+            for (String name : structure.files().keySet()) {
+                var parts = name.split("/");
                 Path parent = root;
                 for (int i = 0; i < parts.length - 1; i++) {
                     parent = parent.resolve(parts[i]);
@@ -63,27 +74,98 @@ public final class SnapshotVerifier {
                         if (!Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Invalid restore directory", exists);
                     }
                 }
-                Path output = parent.resolve(parts[parts.length - 1]);
-                var digest = sha256();
-                long count = 0;
-                try (var input = archive.getInputStream(verified.entries().get("world/" + item.getKey()));
-                     var target = Files.newOutputStream(output, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
-                    int read;
-                    while ((read = input.read(buffer)) != -1) {
-                        count += read;
-                        if (count > item.getValue().size()) throw new IOException("Archive entry exceeds declared size");
-                        digest.update(buffer, 0, read);
-                        target.write(buffer, 0, read);
-                    }
-                }
-                if (count != item.getValue().size() || !HexFormat.of().formatHex(digest.digest()).equals(item.getValue().sha256()))
-                    throw new IOException("Restored content mismatch");
+                outputs.put(name, parent.resolve(parts[parts.length - 1]));
             }
-            return verified.result();
+            checkContents(path, structure, outputs, progress);
+        } catch (IOException | RuntimeException failure) {
+            removeTree(root);
+            throw failure;
+        }
+        return structure.result();
+    }
+
+    /** Best effort: the directory was created by this restore, so nothing else lives in it. */
+    private static void removeTree(Path root) {
+        try (var walk = Files.walk(root)) {
+            for (Path path : walk.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+        } catch (IOException | RuntimeException ignored) { }
+    }
+
+    /**
+     * Inflates every file, checks its size and SHA-256 against the manifest, and writes it to its output when one
+     * is given. Files are spread over several threads, each with its own handle on the archive.
+     */
+    private static void checkContents(Path path, Verified structure, Map<String, Path> outputs,
+                                      java.util.function.DoubleConsumer progress) throws IOException {
+        var names = new java.util.ArrayList<>(structure.files().keySet());
+        // Largest first, so one big file does not finish alone at the end.
+        names.sort(java.util.Comparator.comparingLong((String name) -> structure.files().get(name).size()).reversed());
+        var bytes = new ByteProgress(progress, structure.result().uncompressedBytes());
+        int threads = Math.max(1, Math.min(8, Math.min(names.size(), Runtime.getRuntime().availableProcessors() - 1)));
+        var next = new java.util.concurrent.atomic.AtomicInteger();
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(threads, task -> {
+            var thread = new Thread(task, "hosthop-unzip");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try {
+            var workers = new java.util.ArrayList<java.util.concurrent.Future<?>>();
+            for (int t = 0; t < threads; t++) workers.add(pool.submit(() -> {
+                try (var archive = ZipFile.builder().setPath(path).get()) {
+                    byte[] buffer = new byte[1024 * 1024];
+                    int index;
+                    while ((index = next.getAndIncrement()) < names.size()) {
+                        if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("Archive check interrupted");
+                        String name = names.get(index);
+                        checkFile(archive, name, structure.files().get(name), outputs == null ? null : outputs.get(name), buffer, bytes);
+                    }
+                } catch (IOException | RuntimeException failure) {
+                    next.set(names.size());
+                    throw failure;
+                }
+                return null;
+            }));
+            IOException failure = null;
+            for (var worker : workers) {
+                try { worker.get(); }
+                catch (java.util.concurrent.ExecutionException failed) {
+                    if (failure == null) failure = failed.getCause() instanceof IOException io ? io : new IOException("Archive check failed", failed.getCause());
+                }
+            }
+            if (failure != null) throw failure;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new java.io.InterruptedIOException("Archive check interrupted");
+        } finally {
+            pool.shutdownNow();
+            try { pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
         }
     }
 
-    private static Verified verifyArchive(ZipFile archive) throws IOException {
+    private static void checkFile(ZipFile archive, String name, Metadata metadata, Path output, byte[] buffer, ByteProgress bytes) throws IOException {
+        var entry = archive.getEntry("world/" + name);
+        if (entry == null || entry.isDirectory() || entry.getSize() != metadata.size()) throw new IOException("Missing or invalid archive entry");
+        var digest = sha256();
+        long count = 0;
+        try (var input = archive.getInputStream(entry);
+             var target = output == null ? java.io.OutputStream.nullOutputStream()
+                     : Files.newOutputStream(output, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                count += read;
+                if (count > metadata.size()) throw new IOException("Archive entry exceeds declared size");
+                digest.update(buffer, 0, read);
+                target.write(buffer, 0, read);
+                bytes.add(read);
+            }
+        }
+        if (count != metadata.size() || !HexFormat.of().formatHex(digest.digest()).equals(metadata.sha256()))
+            throw new IOException(output == null ? "Archive content mismatch" : "Restored content mismatch");
+    }
+
+    /** Checks entry types, names, the manifest and declared sizes; the contents are checked by checkContents. */
+    private static Verified verifyStructure(ZipFile archive) throws IOException {
             var names = new HashSet<String>();
             var entries = new HashMap<String, ZipArchiveEntry>();
             var enumeration = archive.getEntries();
@@ -103,25 +185,12 @@ public final class SnapshotVerifier {
             try (var input = new LimitedInput(archive.getInputStream(manifest), MAX_MANIFEST)) { files = readManifest(input); }
             if (entries.size() != files.size() + 1) throw new IOException("Unexpected archive entry");
             long total = 0;
-            byte[] buffer = new byte[1024 * 1024];
             for (var item : files.entrySet()) {
                 var entry = entries.get("world/" + item.getKey());
                 var metadata = item.getValue();
                 if (entry == null || entry.isDirectory() || entry.getSize() != metadata.size()) throw new IOException("Missing or invalid archive entry");
                 total += metadata.size();
                 if (total > MAX_TOTAL) throw new IOException("Snapshot too large");
-                var digest = sha256();
-                long count = 0;
-                try (var input = archive.getInputStream(entry)) {
-                    int read;
-                    while ((read = input.read(buffer)) != -1) {
-                        count += read;
-                        if (count > metadata.size()) throw new IOException("Archive entry exceeds declared size");
-                        digest.update(buffer, 0, read);
-                    }
-                }
-                if (count != metadata.size() || !HexFormat.of().formatHex(digest.digest()).equals(metadata.sha256()))
-                    throw new IOException("Archive content mismatch");
             }
             return new Verified(files, entries, new Result(files.size(), total));
     }
