@@ -133,6 +133,14 @@ neoForge {
         server {
             server()
             programArgument '--nogui'
+            if (project.hasProperty('hosthopServerDir')) {
+                def root = file('../.tools').canonicalFile.toPath()
+                def target = file(project.property('hosthopServerDir')).canonicalFile.toPath()
+                if (!target.startsWith(root) || target == root || !java.nio.file.Files.isRegularFile(target.resolve('.hosthop-test-server'))) {
+                    throw new GradleException('Test server directory must be prepared under .tools')
+                }
+                gameDirectory = target.toFile()
+            }
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         }
 
@@ -278,9 +286,29 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
 }
 
+// The early-service JAR that loads distributed mods; HostHop installs it into the mods folder itself.
+sourceSets {
+    loader {
+        compileClasspath += sourceSets.main.compileClasspath
+    }
+}
+var loaderJar = tasks.register('loaderJar', Jar) {
+    from sourceSets.loader.output
+    archiveBaseName = 'hosthop-mod-loader'
+    archiveVersion = ''
+    destinationDirectory = layout.buildDirectory.dir('loader')
+    // Fixed timestamps keep the embedded file identical between builds, so it is rewritten only when it changes.
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+    manifest { attributes 'Automatic-Module-Name': 'hosthop_mod_loader' }
+}
+tasks.named('processResources', ProcessResources) {
+    from(loaderJar) { into 'hosthop' }
+}
+
 sourceSets {
     safetyTest {
-        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath + sourceSets.loader.output
         runtimeClasspath += sourceSets.main.runtimeClasspath
     }
 }
@@ -346,6 +374,12 @@ tasks.register('windowsSecretSafetyCheck', JavaExec) {
     classpath = sourceSets.safetyTest.runtimeClasspath
     mainClass = 'dev.hosthop.storage.WindowsSecretStoreTest'
 }
+tasks.register('distributionSafetyCheck', JavaExec) {
+    dependsOn tasks.named('safetyTestClasses')
+    classpath = sourceSets.safetyTest.runtimeClasspath + sourceSets.loader.output
+    mainClass = 'dev.hosthop.distribution.ModDistributionTest'
+}
+tasks.named('check') { dependsOn tasks.named('distributionSafetyCheck') }
 tasks.register('invitationSafetyCheck', JavaExec) {
     dependsOn tasks.named('safetyTestClasses')
     classpath = sourceSets.safetyTest.runtimeClasspath

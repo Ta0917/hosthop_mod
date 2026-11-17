@@ -11,7 +11,8 @@ function configuration(env) {
     throw new Error('Invalid configuration');
   const worldIds = new Set();
   for (const world of worlds) {
-    if (!id(world.id) || worldIds.has(world.id) || typeof world.folder !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(world.folder))
+    if (!id(world.id) || worldIds.has(world.id) || typeof world.folder !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(world.folder)
+        || (world.publisher !== undefined && !id(world.publisher)))
       throw new Error('Invalid world configuration');
     worldIds.add(world.id);
   }

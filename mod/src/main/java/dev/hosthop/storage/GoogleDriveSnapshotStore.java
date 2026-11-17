@@ -103,7 +103,19 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
     }
 
     @Override public ObjectRef upload(Path archive, String folderId, String accessToken, java.util.function.LongConsumer progress) throws IOException, InterruptedException {
-        return send(archive, null, folderId, accessToken, progress);
+        return send(archive, null, folderId, accessToken, progress, true);
+    }
+
+    /**
+     * Uploads a file that is not world data, such as the distributed mod bundle; its integrity comes from the
+     * SHA-256 the caller records, not from snapshot validation. existing, when not null, is overwritten in place.
+     */
+    public ObjectRef uploadOpaque(Path file, String existing, String folderId, String accessToken) throws IOException, InterruptedException {
+        if (existing != null) {
+            checkSlot(existing, folderId, accessToken);
+            return send(file, existing, folderId, accessToken, ignored -> {}, false);
+        }
+        return send(file, null, folderId, accessToken, ignored -> {}, false);
     }
 
     /**
@@ -113,6 +125,11 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
      */
     @Override public ObjectRef overwrite(Path archive, String fileId, String folderId, String accessToken, java.util.function.LongConsumer progress)
             throws IOException, InterruptedException {
+        checkSlot(fileId, folderId, accessToken);
+        return send(archive, fileId, folderId, accessToken, progress, true);
+    }
+
+    private void checkSlot(String fileId, String folderId, String accessToken) throws IOException, InterruptedException {
         if (fileId == null || !fileId.matches("[A-Za-z0-9_-]{1,200}")) throw new IllegalArgumentException("Invalid Drive file");
         if (folderId == null || !folderId.matches("[A-Za-z0-9_-]{1,200}") || accessToken == null
                 || accessToken.isBlank() || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
@@ -133,7 +150,6 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
                     && capabilities != null && capabilities.get("canEdit").getAsBoolean();
         } catch (RuntimeException invalid) { throw new IOException("Invalid Drive slot metadata", invalid); }
         if (!usable) throw new SlotUnavailable();
-        return send(archive, fileId, folderId, accessToken, progress);
     }
 
     /** The slot is missing, trashed, outside the folder or not writable by this account. */
@@ -141,14 +157,15 @@ public final class GoogleDriveSnapshotStore implements SnapshotStore {
         public SlotUnavailable() { super("Drive slot is unavailable"); }
     }
 
-    private ObjectRef send(Path archive, String existing, String folderId, String accessToken, java.util.function.LongConsumer progress) throws IOException, InterruptedException {
+    private ObjectRef send(Path archive, String existing, String folderId, String accessToken, java.util.function.LongConsumer progress, boolean snapshot) throws IOException, InterruptedException {
         if (progress == null) throw new IllegalArgumentException("Missing progress callback");
         if (folderId == null || !folderId.matches("[A-Za-z0-9_-]{1,200}") || accessToken == null
                 || accessToken.isBlank() || accessToken.length() > 4096 || accessToken.chars().anyMatch(Character::isISOControl))
             throw new IllegalArgumentException("Invalid Drive credentials or folder");
         if (!Files.isRegularFile(archive, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Invalid archive");
-        if (BinaryDelta.isDelta(archive)) BinaryDelta.inspect(archive);
-        else SnapshotVerifier.verify(archive);
+        // Other files are checked against the digest their caller records instead.
+        if (snapshot && BinaryDelta.isDelta(archive)) BinaryDelta.inspect(archive);
+        else if (snapshot) SnapshotVerifier.verify(archive);
         long size = Files.size(archive);
         if (size <= 0 || size > MAX_SIZE) throw new IOException("Invalid snapshot size");
         checkUploadCapacity(size, accessToken);

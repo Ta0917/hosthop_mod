@@ -31,7 +31,7 @@ public final class HostHopScreen extends Screen {
     private final Screen parent;
     private final AtomicLong request = new AtomicLong();
     private Component status = Component.translatable("screen.hosthop.initial");
-    private Button register, authorize, authorizeSnapshot, join, history, exportRecovery, recoverUnclean, maintenance;
+    private Button register, authorize, authorizeSnapshot, join, history, exportRecovery, recoverUnclean, maintenance, mods;
     private EditBox initialWorld;
     private boolean startedHere;
     private boolean watchingSave;
@@ -62,9 +62,11 @@ public final class HostHopScreen extends Screen {
         recoverUnclean = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.recover_unclean"), button -> confirmUncleanRecovery())
                 .bounds(x + 107, height / 2 + 60, 103, 20).build());
         maintenance = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.maintenance"), button -> toggleMaintenance())
-                .bounds(x, height / 2 + 86, 103, 20).build());
+                .bounds(x, height / 2 + 86, 68, 20).build());
+        mods = addRenderableWidget(Button.builder(Component.translatable("screen.hosthop.mods"), button -> Minecraft.getInstance().gui.setScreen(new HostHopModsScreen(this)))
+                .bounds(x + 71, height / 2 + 86, 68, 20).build());
         addRenderableWidget(Button.builder(Component.translatable("gui.back"), button -> onClose())
-                .bounds(x + 107, height / 2 + 86, 103, 20).build());
+                .bounds(x + 142, height / 2 + 86, 68, 20).build());
         String currentStatus = HostWorldRuntime.lastStatus();
         if (!HostWorldRuntime.active() && currentStatus.equals("screen.hosthop.initial")) {
             try {
@@ -259,6 +261,7 @@ public final class HostHopScreen extends Screen {
             try {
                 var invitation = Invitation.fromSecrets(new WindowsSecretStore(secretPath()).load());
                 var authority = new LeaseAuthorityClient(URI.create(invitation.authority()), invitation.memberToken());
+                if (!distributedModsReady(id, invitation, authority)) return;
                 var host = authority.hostStatus(invitation.world(), 2);
                 if (host.maintenance()) { finish(id, "screen.hosthop.maintenance_blocked"); return; }
                 var differences = host.endpoint() == null ? null : authority.compatibility(invitation.world(), host.endpoint().epoch())
@@ -311,6 +314,50 @@ public final class HostHopScreen extends Screen {
                 });
             } catch (Exception failure) { finish(id, "screen.hosthop.join_failed"); }
         });
+    }
+
+    /**
+     * Brings the publisher's distributed mods up to date before hosting or joining, so everyone plays with the same
+     * set without downloading anything by hand. Returns false when joining must stop here: the player is asked
+     * about new mods, a restart is needed to load an update, or the list could not be trusted.
+     */
+    private boolean distributedModsReady(long id, Invitation invitation, LeaseAuthorityClient authority) {
+        var manager = new DriveCredentialManager(new WindowsSecretStore(secretPath()), new GoogleDriveAuthorization(invitation.oauthClientId(), invitation.oauthClientSecret()));
+        activeAuthorization = manager;
+        try {
+            var outcome = dev.hosthop.distribution.ModDistribution.sync(ModSync.local(), invitation, authority, manager, uri -> Minecraft.getInstance().execute(() -> {
+                if (id == request.get() && Minecraft.getInstance().gui.screen() == this) {
+                    busy(true, "screen.hosthop.mods_authorizing");
+                    Util.getPlatform().openUri(uri);
+                } else manager.cancelAuthorization();
+            }), FMLPaths.MODSDIR.get());
+            if (outcome instanceof dev.hosthop.distribution.ModDistribution.NeedsConsent needs) {
+                Minecraft.getInstance().execute(() -> {
+                    if (id != request.get() || Minecraft.getInstance().gui.screen() != this) return;
+                    Minecraft.getInstance().gui.setScreen(ModSync.consent(this, needs.pending(), needs.fingerprint(), () -> {
+                        try {
+                            ModSync.local().consent(needs.pending().stream().map(dev.hosthop.distribution.ModManifest.Entry::id).toList());
+                            joinHost();
+                        } catch (IOException failure) { busy(false, "screen.hosthop.mods_state_invalid"); }
+                    }, () -> busy(false, "screen.hosthop.mods_declined")));
+                });
+                return false;
+            }
+            if (outcome instanceof dev.hosthop.distribution.ModDistribution.Duplicates || outcome instanceof dev.hosthop.distribution.ModDistribution.RestartRequired) {
+                var message = HostHopModsScreen.describe(outcome);
+                Minecraft.getInstance().execute(() -> {
+                    if (id == request.get() && Minecraft.getInstance().gui.screen() == this) { busy(false, "screen.hosthop.initial"); status = message; }
+                });
+                return false;
+            }
+            return true;
+        } catch (Exception failure) {
+            var message = HostHopModsScreen.failureMessage(failure);
+            Minecraft.getInstance().execute(() -> {
+                if (id == request.get() && Minecraft.getInstance().gui.screen() == this) { busy(false, "screen.hosthop.initial"); status = message; }
+            });
+            return false;
+        } finally { activeAuthorization = null; }
     }
 
     /**
@@ -389,7 +436,7 @@ public final class HostHopScreen extends Screen {
         });
     }
     void compatibilityChanged() { busy(false, "screen.hosthop.compatibility_recheck"); }
-    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; exportRecovery.active = !value; recoverUnclean.active = !value; maintenance.active = !value; initialWorld.active = !value;
+    private void busy(boolean value, String message) { register.active = !value; authorize.active = !value; authorizeSnapshot.active = !value; join.active = !value; history.active = !value; mods.active = !value; exportRecovery.active = !value; recoverUnclean.active = !value; maintenance.active = !value; initialWorld.active = !value;
         status = message.equals("screen.hosthop.required_mods_missing")
                 ? Component.translatable(message, requiredModList(HostWorldRuntime.requiredProblems())) : Component.translatable(message); }
 

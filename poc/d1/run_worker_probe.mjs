@@ -12,16 +12,20 @@ const load = name => readFileSync(join(here, name), 'utf8');
 const schema = load('schema.sql').replace(/^--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
 const migration = load('recover_stopped_migration.sql').replace(/^\s*--.*$/gm, '').split(/(?=CREATE (?:TABLE|TRIGGER) )/).map(s => s.trim()).filter(Boolean);
 const token = 'q'.repeat(43);
-const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))),
-  value => value.toString(16).padStart(2, '0')).join('');
+const guestToken = 'g'.repeat(43);
+const digest = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))),
+  item => item.toString(16).padStart(2, '0')).join('');
+const hash = await digest(token);
+const guestHash = await digest(guestToken);
 const built = name => readFileSync(join(here, '..', '..', 'service', 'build', name), 'utf8');
 const mf = new Miniflare(convertV4MiniflareOptions({
   modules: ['worker.mjs', 'sql.mjs', 'lease_service.mjs', 'drive_verifier.mjs']
     .map(path => ({ type: 'ESModule', path, contents: built(path) })),
   compatibilityDate: '2026-11-01',
   d1Databases: { DB: '00000000-0000-0000-0000-000000000000' },
-  bindings: { MEMBERS_JSON: JSON.stringify([{ world: 'test-world', owner: 'test-owner', tokenHash: hash }]),
-    WORLDS_JSON: JSON.stringify([{ id: 'test-world', folder: 'test-folder' }]) },
+  bindings: { MEMBERS_JSON: JSON.stringify([{ world: 'test-world', owner: 'test-owner', tokenHash: hash },
+      { world: 'test-world', owner: 'test-guest', tokenHash: guestHash }]),
+    WORLDS_JSON: JSON.stringify([{ id: 'test-world', folder: 'test-folder', publisher: 'test-owner' }]) },
 }));
 const check = (value, message) => { if (!value) throw new Error(message); };
 try {
@@ -32,6 +36,7 @@ try {
   await db.batch(load('checkpoint_dependencies_migration.sql').trim().split(/\r?\n(?=ALTER TABLE |CREATE |DROP TRIGGER )/).map(statement => db.prepare(statement)));
   await db.batch(load('maintenance_migration.sql').trim().split(/\r?\n(?=CREATE )/).map(statement => db.prepare(statement)));
   await db.prepare(load('compatibility_migration.sql')).run();
+  await db.prepare(load('distributed_mods_migration.sql')).run();
   await db.prepare('INSERT INTO worlds (id) VALUES (?1)').bind('test-world').run();
   const call = (route, body, credential = token) => mf.dispatchFetch(`http://localhost/${route}`, {
     method: 'POST', headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify(body),
@@ -53,6 +58,16 @@ try {
   const compatibility = await (await call('compatibility-get', { world: 'test-world' })).json();
   check(compatibility.epoch === grant.epoch && JSON.parse(compatibility.manifest).mods, 'compatibility lookup failed');
   check((await call('acquire-status', body)).status === 200, 'grant lookup failed');
+  check((await call('mods-get', { world: 'test-world' })).status === 404, 'empty distribution listed');
+  const mods = { world: 'test-world', revision: 1, manifest: '{"format":1}', signature: 'c2ln' };
+  check((await call('mods-set', mods, guestToken)).status === 403, 'non-publisher replaced distributed mods');
+  check((await call('mods-set', mods)).status === 200, 'publisher could not distribute mods');
+  check((await call('mods-set', mods)).status === 200, 'identical retry rejected');
+  check((await call('mods-set', { ...mods, signature: 'b3RoZXI' })).status === 409, 'same revision replaced');
+  check((await call('mods-set', { ...mods, revision: 2, manifest: '{"format":1,"n":2}' })).status === 200, 'newer revision rejected');
+  check((await call('mods-set', mods)).status === 409, 'older revision restored');
+  const listed = await (await call('mods-get', { world: 'test-world' }, guestToken)).json();
+  check(listed.revision === 2 && listed.manifest === '{"format":1,"n":2}', 'distributed mods lookup failed');
   const current = await (await call('endpoint-revision', { ...body, epoch: grant.epoch })).json();
   const published = await call('endpoint-update', { ...body, epoch: grant.epoch,
     revision: current.endpoint_revision, endpoint: 'example.e4mc.link' });

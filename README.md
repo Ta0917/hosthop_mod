@@ -4,6 +4,7 @@ Minecraft共有ワールドMODの開発プロジェクト。実Drive・Cloudflar
 
 - [技術調査と未解決事項](docs/feasibility.md)
 - [運用条件と無料枠の確認状況](docs/operating-limits.md)
+- [配布MOD（サーバー向けMODの自動導入）](docs/mod-distribution.md)
 - `python -m unittest discover -s poc -v` でSQLiteのリースモデルを検証できます。
 - `mod/` はNeoForge 26.2.0.6-beta用のMODです。基準となる完全な保存データからの差分を保存・復元できます。基準データは必要な限り保持し、差分形式に対応しない旧MODでは開けないため、利用者全員の更新が必要です。実クラウドの隔離テストは実施済みですが、Minecraftの別PC間での差分ホスト交代は未検証です。異常終了後の復旧は一部のみ対応しています。
 - `poc/snapshot_manifest.py` は停止済みコピーの全ファイルをSHA-256で記録・検証します。一貫したスナップショットの作成やバックアップ機能ではありません。

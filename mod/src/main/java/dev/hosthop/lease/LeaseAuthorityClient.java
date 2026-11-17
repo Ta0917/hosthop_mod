@@ -179,6 +179,46 @@ public final class LeaseAuthorityClient {
         } catch (RuntimeException invalid) { throw new IOException("Invalid compatibility response", invalid); }
     }
 
+    /** The publisher's signed mod list as stored; the caller verifies the signature. */
+    public record DistributedMods(long revision, String manifest, String signature) {}
+    /** Only the world's configured publisher may replace the list. */
+    public static final class NotPublisher extends IOException {
+        private NotPublisher() { super("This member is not the world's mod publisher"); }
+    }
+
+    /** Null when nothing has been distributed for the world. */
+    public DistributedMods distributedMods(String world) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID)) throw new IllegalArgumentException("Invalid world");
+        var body = new JsonObject(); body.addProperty("world", world);
+        var reply = exchange.send(jsonRequest("mods-get", body.toString()));
+        if (reply != null && reply.status() == 404) return null;
+        if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES) throw new IOException("Distributed mods unavailable");
+        try {
+            var root = com.google.gson.JsonParser.parseString(reply.body()).getAsJsonObject();
+            long revision = root.get("revision").getAsLong();
+            String manifest = root.get("manifest").getAsString(), signature = root.get("signature").getAsString();
+            if (revision < 1 || manifest.length() > 60000 || !signature.matches("[A-Za-z0-9_-]{1,200}")) throw new IOException("Invalid distributed mods");
+            return new DistributedMods(revision, manifest, signature);
+        } catch (RuntimeException invalid) { throw new IOException("Invalid distributed mods response", invalid); }
+    }
+
+    public void publishMods(String world, long revision, String manifest, String signature) throws IOException, InterruptedException {
+        if (world == null || !world.matches(ID) || revision < 1 || manifest == null || manifest.length() < 2 || manifest.length() > 60000
+                || signature == null || !signature.matches("[A-Za-z0-9_-]{1,200}")) throw new IllegalArgumentException("Invalid mod list");
+        var body = new JsonObject(); body.addProperty("world", world); body.addProperty("revision", revision);
+        body.addProperty("manifest", manifest); body.addProperty("signature", signature);
+        var reply = exchange.send(jsonRequest("mods-set", body.toString()));
+        if (reply != null && reply.status() == 403) throw new NotPublisher();
+        if (reply == null || reply.status() != 200 || reply.body() == null || reply.body().length() > MAX_REPLY_BYTES) throw new IOException("Mod list was not accepted");
+        if (required(parseFields(reply.body()).numbers(), "revision") != revision) throw new IOException("Mod list revision mismatch");
+    }
+
+    private HttpRequest jsonRequest(String route, String text) {
+        return HttpRequest.newBuilder(base.resolve("/" + route)).timeout(Duration.ofSeconds(15))
+                .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(text, StandardCharsets.UTF_8)).build();
+    }
+
     public EndpointLease endpointRevision(String world, String lease, long epoch, long marginSeconds) throws IOException, InterruptedException {
         return endpointUpdate("endpoint-revision", world, lease, epoch, -1, null, marginSeconds);
     }
